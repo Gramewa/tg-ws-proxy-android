@@ -266,7 +266,8 @@ class ProxyProtocolTest {
         assertTrue(censored.contains("kws2.web.telegram.org"))
         assertFalse(censored.contains("pclead.co.uk"))
         assertFalse(censored.contains("secret.workers.dev"))
-        assertTrue(censored.contains(".co.uk"))
+        assertTrue(censored.contains("pcl***.c*.uk"))
+        assertTrue(censored.contains("sec***.wor****.dev"))
     }
 
     @Test
