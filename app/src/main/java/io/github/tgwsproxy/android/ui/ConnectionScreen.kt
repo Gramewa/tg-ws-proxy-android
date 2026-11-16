@@ -31,12 +31,15 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -97,6 +100,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -225,6 +229,7 @@ fun ConnectionScreen(strings: AppStrings) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SimpleConnectionView(
     strings: AppStrings,
@@ -316,18 +321,20 @@ private fun SimpleConnectionView(
                     onClick = onOpenTelegram,
                     modifier = Modifier
                         .weight(1f)
-                        .height(54.dp),
+                        .heightIn(min = 54.dp),
                     shape = RoundedCornerShape(16.dp),
                     contentPadding = PaddingValues(0.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
                 ) {
                     Box(
                         modifier = Modifier
-                            .fillMaxSize()
+                            .fillMaxWidth()
+                            .heightIn(min = 54.dp)
                             .background(gradient, RoundedCornerShape(16.dp)),
                         contentAlignment = Alignment.Center,
                     ) {
                         Row(
+                            modifier = Modifier.padding(horizontal = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.Center,
                         ) {
@@ -343,6 +350,9 @@ private fun SimpleConnectionView(
                                 color = MaterialTheme.colorScheme.onPrimary,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -415,9 +425,9 @@ private fun SimpleConnectionView(
                         .padding(end = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                    FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text(
                             text = strings.simpleBoostTitle,
@@ -434,6 +444,8 @@ private fun SimpleConnectionView(
                                     color = MaterialTheme.colorScheme.onTertiary,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                 )
                             }
@@ -467,12 +479,12 @@ private fun SimpleConnectionView(
             shape = RoundedCornerShape(18.dp),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
         ) {
-            Row(
+            FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 QuickFooterPill(
                     label = if (settings.language == "ru") "RU" else "EN",
@@ -576,6 +588,9 @@ private fun SimpleConnectionView(
                             },
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
                             color = if (availableRelease != null) {
                                 MaterialTheme.colorScheme.onTertiaryContainer
                             } else {
@@ -589,6 +604,7 @@ private fun SimpleConnectionView(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ExpertConnectionView(
     strings: AppStrings,
@@ -642,8 +658,8 @@ private fun ExpertConnectionView(
                     HeroPowerOrb(
                         isRunning = isRunning,
                         isTransitioning = isTransitioning,
-                        stageSize = 104.dp,
-                        orbSize = 76.dp,
+                        stageSize = 92.dp,
+                        orbSize = 68.dp,
                         onClick = onToggleProxy,
                     )
 
@@ -661,14 +677,14 @@ private fun ExpertConnectionView(
                                     isRunning -> strings.statusRunning
                                     else -> strings.statusStopped
                                 },
-                                style = MaterialTheme.typography.titleLarge,
+                                style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                             )
                         }
 
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             Surface(
                                 color = MaterialTheme.colorScheme.surfaceVariant,
@@ -678,6 +694,9 @@ private fun ExpertConnectionView(
                                     text = "$host:$port",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                                 )
                             }
@@ -691,6 +710,8 @@ private fun ExpertConnectionView(
                                         color = MaterialTheme.colorScheme.onTertiaryContainer,
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        softWrap = false,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                                     )
                                 }
@@ -703,6 +724,9 @@ private fun ExpertConnectionView(
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -754,7 +778,7 @@ private fun ExpertConnectionView(
             enabled = !isTransitioning,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp),
+                .heightIn(min = 52.dp),
             shape = RoundedCornerShape(16.dp),
             colors = if (isRunning) {
                 ButtonDefaults.buttonColors(
@@ -782,31 +806,42 @@ private fun ExpertConnectionView(
                     else -> strings.btnStart
                 },
                 style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
             )
         }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Button(
                 onClick = onOpenTelegram,
-                modifier = Modifier.weight(1.35f),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp),
                 shape = RoundedCornerShape(14.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text(strings.btnOpenTelegram, maxLines = 1)
+                Text(
+                    text = strings.btnOpenTelegram,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
 
             OutlinedButton(
                 onClick = onCopyLink,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.size(48.dp),
                 shape = RoundedCornerShape(14.dp),
+                contentPadding = PaddingValues(0.dp),
             ) {
-                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(strings.btnCopyLink, maxLines = 1)
+                Icon(Icons.Default.ContentCopy, contentDescription = strings.btnCopyLink, modifier = Modifier.size(20.dp))
             }
         }
 
@@ -1011,30 +1046,36 @@ private fun TrafficGradientCard(
         color = accent.copy(alpha = 0.11f),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Surface(
                 color = accent.copy(alpha = 0.2f),
                 shape = CircleShape,
-                modifier = Modifier.size(32.dp),
+                modifier = Modifier.size(28.dp),
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                    Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
                 }
             }
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = label,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = value,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -1074,8 +1115,11 @@ private fun UpdateAvailableBanner(
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
+            Spacer(Modifier.width(8.dp))
             Surface(
                 color = MaterialTheme.colorScheme.tertiary,
                 shape = RoundedCornerShape(999.dp),
@@ -1085,6 +1129,8 @@ private fun UpdateAvailableBanner(
                     color = MaterialTheme.colorScheme.onTertiary,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                 )
             }
@@ -1173,8 +1219,14 @@ private fun BatteryOptimizationCard(
                     )
                     runCatching { context.startActivity(intent) }
                 },
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             ) {
-                Text(actionLabel)
+                Text(
+                    text = actionLabel,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
@@ -1191,6 +1243,9 @@ private fun QuickFooterPill(label: String, onClick: () -> Unit) {
             text = label,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
         )
     }
@@ -1209,11 +1264,18 @@ private fun QuickFooterIconPill(icon: ImageVector, label: String, onClick: () ->
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Icon(icon, contentDescription = label, modifier = Modifier.size(15.dp))
-            Text(text = label, style = MaterialTheme.typography.labelMedium)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun QuickSwitchRow(
     title: String,
@@ -1234,9 +1296,9 @@ private fun QuickSwitchRow(
                 .padding(end = 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+            FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
                     text = title,
@@ -1247,7 +1309,6 @@ private fun QuickSwitchRow(
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
-                    modifier = Modifier.weight(1f, fill = false),
                 )
                 if (badge != null) {
                     Surface(
@@ -1259,6 +1320,8 @@ private fun QuickSwitchRow(
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                         )
                     }
@@ -1286,7 +1349,7 @@ private fun MiniStatChip(label: String, value: String, modifier: Modifier = Modi
         shape = RoundedCornerShape(12.dp),
     ) {
         Column(
-            modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
@@ -1294,12 +1357,17 @@ private fun MiniStatChip(label: String, value: String, modifier: Modifier = Modi
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

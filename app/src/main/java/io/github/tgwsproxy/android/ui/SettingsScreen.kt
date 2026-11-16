@@ -3,15 +3,17 @@ package io.github.tgwsproxy.android.ui
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,6 +33,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -51,6 +54,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.tgwsproxy.android.BuildConfig
@@ -68,6 +72,7 @@ import io.github.tgwsproxy.android.service.ProxyController
 import io.github.tgwsproxy.android.update.AppUpdater
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(strings: AppStrings) {
     val context = LocalContext.current
@@ -148,14 +153,28 @@ fun SettingsScreen(strings: AppStrings) {
                 OutlinedTextField(
                     value = draft.host,
                     onValueChange = { draft = draft.copy(host = it) },
-                    label = { Text(strings.labelHost) },
+                    label = {
+                        Text(
+                            text = strings.labelHost,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
                     singleLine = true,
                     modifier = Modifier.weight(1.4f),
                 )
                 OutlinedTextField(
                     value = portText,
                     onValueChange = { portText = it },
-                    label = { Text(strings.labelPort) },
+                    label = {
+                        Text(
+                            text = strings.labelPort,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f),
@@ -165,14 +184,19 @@ fun SettingsScreen(strings: AppStrings) {
             OutlinedTextField(
                 value = draft.secret,
                 onValueChange = { draft = draft.copy(secret = it) },
-                label = { Text(strings.labelSecret) },
+                label = {
+                    Text(
+                        text = strings.labelSecret,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 trailingIcon = {
-                    TextButton(onClick = { draft = draft.copy(secret = generateSecretHex()) }) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(strings.btnGenerateSecret)
+                    IconButton(onClick = { draft = draft.copy(secret = generateSecretHex()) }) {
+                        Icon(Icons.Default.Refresh, contentDescription = strings.btnGenerateSecret)
                     }
                 },
             )
@@ -180,7 +204,14 @@ fun SettingsScreen(strings: AppStrings) {
             OutlinedTextField(
                 value = draft.fakeTlsDomain,
                 onValueChange = { draft = draft.copy(fakeTlsDomain = it) },
-                label = { Text(strings.labelFakeTlsDomain) },
+                label = {
+                    Text(
+                        text = strings.labelFakeTlsDomain,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 placeholder = { Text(strings.hintFakeTlsDomain) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
@@ -212,21 +243,31 @@ fun SettingsScreen(strings: AppStrings) {
                 maxLines = 6,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OutlinedButton(
                     onClick = { draft = draft.copy(dcIpRules = AppSettings.DEFAULT_DC_RULES) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(strings.btnDcDefaults, maxLines = 1)
+                    Text(
+                        text = strings.btnDcDefaults,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 OutlinedButton(
                     onClick = { draft = draft.copy(dcIpRules = "") },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(strings.btnDcClear, maxLines = 1)
+                    Text(
+                        text = strings.btnDcClear,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
@@ -287,15 +328,26 @@ fun SettingsScreen(strings: AppStrings) {
                     }
                 },
                 enabled = !testingCf,
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 if (testingCf) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text(strings.testingInProgress)
+                    Text(
+                        text = strings.testingInProgress,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 } else {
                     Icon(Icons.Default.NetworkCheck, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(strings.btnTestConnectivity)
+                    Text(
+                        text = strings.btnTestConnectivity,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
@@ -330,15 +382,26 @@ fun SettingsScreen(strings: AppStrings) {
                     }
                 },
                 enabled = !testingWorker,
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 if (testingWorker) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text(strings.testingInProgress)
+                    Text(
+                        text = strings.testingInProgress,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 } else {
                     Icon(Icons.Default.NetworkCheck, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(strings.btnTestConnectivity)
+                    Text(
+                        text = strings.btnTestConnectivity,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
@@ -356,27 +419,34 @@ fun SettingsScreen(strings: AppStrings) {
                 checked = draft.disableSecure,
                 onCheckedChange = { draft = draft.copy(disableSecure = it) },
             )
-            Row(
+            OutlinedTextField(
+                value = bufferText,
+                onValueChange = { bufferText = it },
+                label = {
+                    Text(
+                        text = strings.labelBufKb,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                OutlinedTextField(
-                    value = bufferText,
-                    onValueChange = { bufferText = it },
-                    label = { Text(strings.labelBufKb) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(1f),
-                )
-                OutlinedTextField(
-                    value = poolText,
-                    onValueChange = { poolText = it },
-                    label = { Text(strings.labelPoolSize) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            )
+            OutlinedTextField(
+                value = poolText,
+                onValueChange = { poolText = it },
+                label = {
+                    Text(
+                        text = strings.labelPoolSize,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
         // Section 6: Updates
@@ -405,15 +475,26 @@ fun SettingsScreen(strings: AppStrings) {
                     }
                 },
                 enabled = !isCheckingUpdate,
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 if (isCheckingUpdate) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text(strings.checkingUpdates)
+                    Text(
+                        text = strings.checkingUpdates,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 } else {
                     Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("${strings.btnCheckUpdatesNow} (v${BuildConfig.VERSION_NAME})")
+                    Text(
+                        text = "${strings.btnCheckUpdatesNow} (v${BuildConfig.VERSION_NAME})",
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
@@ -421,58 +502,69 @@ fun SettingsScreen(strings: AppStrings) {
         // Section 7: Interface & System
         SectionCard(title = strings.sectionInterfaceSystem) {
             Text(strings.labelInterfaceMode, style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 FilterChip(
                     selected = draft.simpleMode,
                     onClick = { draft = draft.copy(simpleMode = true) },
-                    label = { Text(strings.modeSimple) },
+                    label = { Text(strings.modeSimple, maxLines = 1, softWrap = false) },
                 )
                 FilterChip(
                     selected = !draft.simpleMode,
                     onClick = { draft = draft.copy(simpleMode = false) },
-                    label = { Text(strings.modeExpert) },
+                    label = { Text(strings.modeExpert, maxLines = 1, softWrap = false) },
                 )
             }
 
             Text(strings.labelLanguage, style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 FilterChip(
                     selected = draft.language == "ru",
                     onClick = { draft = draft.copy(language = "ru") },
-                    label = { Text(strings.langRu) },
+                    label = { Text(strings.langRu, maxLines = 1, softWrap = false) },
                 )
                 FilterChip(
                     selected = draft.language == "en",
                     onClick = { draft = draft.copy(language = "en") },
-                    label = { Text(strings.langEn) },
+                    label = { Text(strings.langEn, maxLines = 1, softWrap = false) },
                 )
             }
 
             Text(strings.labelTheme, style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 FilterChip(
                     selected = draft.themeMode == "auto",
                     onClick = { draft = draft.copy(themeMode = "auto") },
-                    label = { Text(strings.themeAuto) },
+                    label = { Text(strings.themeAuto, maxLines = 1, softWrap = false) },
                 )
                 FilterChip(
                     selected = draft.themeMode == "light",
                     onClick = { draft = draft.copy(themeMode = "light") },
-                    label = { Text(strings.themeLight) },
+                    label = { Text(strings.themeLight, maxLines = 1, softWrap = false) },
                 )
                 FilterChip(
                     selected = draft.themeMode == "dark",
                     onClick = { draft = draft.copy(themeMode = "dark") },
-                    label = { Text(strings.themeDark) },
+                    label = { Text(strings.themeDark, maxLines = 1, softWrap = false) },
                 )
             }
 
             Text(strings.labelPalette, style = MaterialTheme.typography.labelLarge)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 for (opt in AvailablePalettes) {
                     val paletteTitle = when (opt.id) {
@@ -494,7 +586,7 @@ fun SettingsScreen(strings: AppStrings) {
                                     .background(opt.previewColor),
                             )
                         },
-                        label = { Text(paletteTitle, maxLines = 1) },
+                        label = { Text(paletteTitle, maxLines = 1, softWrap = false) },
                     )
                 }
             }
@@ -549,10 +641,16 @@ fun SettingsScreen(strings: AppStrings) {
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp),
+                .heightIn(min = 52.dp),
             shape = RoundedCornerShape(14.dp),
         ) {
-            Text(strings.btnSaveApply, style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = strings.btnSaveApply,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
 
         Spacer(Modifier.height(12.dp))

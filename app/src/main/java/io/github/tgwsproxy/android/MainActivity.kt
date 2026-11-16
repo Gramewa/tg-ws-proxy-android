@@ -46,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -73,11 +74,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             TgWsProxyRoot()
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        AppUpdater.retryPendingInstallIfPermitted(this)
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -136,7 +132,11 @@ private fun TgWsProxyRoot() {
                     title = {
                         Text(
                             text = strings.appName,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     },
                     actions = {
@@ -167,25 +167,53 @@ private fun TgWsProxyRoot() {
                             selected = selectedTab == 0,
                             onClick = { selectedTab = 0 },
                             icon = { Icon(Icons.Default.PowerSettingsNew, contentDescription = strings.navConnection) },
-                            label = { Text(strings.navConnection, maxLines = 1) },
+                            label = {
+                                Text(
+                                    text = strings.navConnection,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
                         )
                         NavigationBarItem(
                             selected = selectedTab == 1,
                             onClick = { selectedTab = 1 },
                             icon = { Icon(Icons.Default.Settings, contentDescription = strings.navSettings) },
-                            label = { Text(strings.navSettings, maxLines = 1) },
+                            label = {
+                                Text(
+                                    text = strings.navSettings,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
                         )
                         NavigationBarItem(
                             selected = selectedTab == 2,
                             onClick = { selectedTab = 2 },
                             icon = { Icon(Icons.AutoMirrored.Filled.ListAlt, contentDescription = strings.navLogs) },
-                            label = { Text(strings.navLogs, maxLines = 1) },
+                            label = {
+                                Text(
+                                    text = strings.navLogs,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
                         )
                         NavigationBarItem(
                             selected = selectedTab == 3,
                             onClick = { selectedTab = 3 },
                             icon = { Icon(Icons.Default.Info, contentDescription = strings.navInfo) },
-                            label = { Text(strings.navInfo, maxLines = 1) },
+                            label = {
+                                Text(
+                                    text = strings.navInfo,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
                         )
                     }
                 }
@@ -261,7 +289,7 @@ private fun ModeSegment(
             .clip(RoundedCornerShape(999.dp))
             .background(bg)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 10.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -270,6 +298,8 @@ private fun ModeSegment(
             style = MaterialTheme.typography.labelMedium,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

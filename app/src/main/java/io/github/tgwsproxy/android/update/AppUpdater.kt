@@ -3,8 +3,6 @@ package io.github.tgwsproxy.android.update
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.provider.Settings
-import androidx.core.content.FileProvider
 import io.github.tgwsproxy.android.BuildConfig
 import io.github.tgwsproxy.android.proxy.ProxyLogger
 import kotlinx.coroutines.Dispatchers
@@ -15,8 +13,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -30,13 +26,6 @@ data class ReleaseInfo(
     val apkFileName: String?,
     val apkSizeBytes: Long,
 )
-
-sealed class DownloadState {
-    data object Idle : DownloadState()
-    data class Progress(val downloadedBytes: Long, val totalBytes: Long) : DownloadState()
-    data class ReadyToInstall(val file: File) : DownloadState()
-    data class Error(val message: String) : DownloadState()
-}
 
 object AppUpdater {
     const val GITHUB_REPO = "Gramewa/tg-ws-proxy-android"
@@ -63,13 +52,6 @@ object AppUpdater {
 
     private val _lastCheckStatus = MutableStateFlow<String?>(null)
     val lastCheckStatus: StateFlow<String?> = _lastCheckStatus.asStateFlow()
-
-    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
-
-    @Volatile
-    var pendingInstallFile: File? = null
-        private set
 
     fun parseVersionParts(raw: String): List<Int> {
         val cleaned = raw.trim()
@@ -213,105 +195,17 @@ object AppUpdater {
         _lastCheckStatus.value = null
     }
 
-    suspend fun downloadAndInstall(context: Context, release: ReleaseInfo) {
-        val url = release.apkDownloadUrl ?: return
-        val appContext = context.applicationContext
-        _downloadState.value = DownloadState.Progress(0L, release.apkSizeBytes)
-
-        try {
-            val targetFile = withContext(Dispatchers.IO) {
-                val updatesDir = File(appContext.cacheDir, "updates").apply { mkdirs() }
-                updatesDir.listFiles()?.forEach { old -> runCatching { old.delete() } }
-
-                val fileName = release.apkFileName ?: "tg-ws-proxy-android-v${release.version}.apk"
-                val tempFile = File(updatesDir, "$fileName.part")
-                val finalFile = File(updatesDir, fileName)
-
-                val req = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", "tg-ws-proxy-android/${BuildConfig.VERSION_NAME}")
-                    .build()
-
-                client.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) {
-                        throw IOException("HTTP ${resp.code}")
-                    }
-                    val body = resp.body ?: throw IOException("Empty APK response")
-                    val total = body.contentLength().takeIf { it > 0L } ?: release.apkSizeBytes
-                    var downloaded = 0L
-                    var lastReport = 0L
-                    val buf = ByteArray(16 * 1024)
-
-                    body.byteStream().use { input ->
-                        FileOutputStream(tempFile).use { output ->
-                            while (true) {
-                                val n = input.read(buf)
-                                if (n == -1) break
-                                output.write(buf, 0, n)
-                                downloaded += n
-                                if (downloaded - lastReport >= 64 * 1024 || downloaded == total) {
-                                    lastReport = downloaded
-                                    _downloadState.value = DownloadState.Progress(downloaded, total)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (!tempFile.renameTo(finalFile)) {
-                    tempFile.copyTo(finalFile, overwrite = true)
-                    tempFile.delete()
-                }
-                finalFile
+    fun openUpdateDownload(context: Context, release: ReleaseInfo) {
+        val targetUrl = release.apkDownloadUrl?.takeIf { it.isNotBlank() } ?: release.htmlUrl
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { context.startActivity(intent) }.onFailure {
+            val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(release.htmlUrl)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-
-            _downloadState.value = DownloadState.ReadyToInstall(targetFile)
-            withContext(Dispatchers.Main) {
-                triggerInstall(appContext, targetFile)
-            }
-        } catch (exc: Exception) {
-            ProxyLogger.w("APK download failed: ${exc.javaClass.simpleName}: ${exc.message}")
-            _downloadState.value = DownloadState.Error(exc.message ?: exc.javaClass.simpleName)
+            runCatching { context.startActivity(fallback) }
         }
-    }
-
-    fun triggerInstall(context: Context, apkFile: File) {
-        if (!apkFile.exists()) {
-            _downloadState.value = DownloadState.Error("APK file missing")
-            return
-        }
-        val appContext = context.applicationContext
-        if (!appContext.packageManager.canRequestPackageInstalls()) {
-            pendingInstallFile = apkFile
-            val permIntent = Intent(
-                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                Uri.parse("package:${appContext.packageName}"),
-            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            runCatching { appContext.startActivity(permIntent) }
-            return
-        }
-
-        pendingInstallFile = null
-        val uri = FileProvider.getUriForFile(
-            appContext,
-            "${BuildConfig.APPLICATION_ID}.fileprovider",
-            apkFile,
-        )
-        val installIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        appContext.startActivity(installIntent)
-    }
-
-    fun retryPendingInstallIfPermitted(context: Context) {
-        val pending = pendingInstallFile ?: return
-        if (!pending.exists()) {
-            pendingInstallFile = null
-            return
-        }
-        if (context.packageManager.canRequestPackageInstalls()) {
-            triggerInstall(context, pending)
-        }
+        dismissDialog()
     }
 }

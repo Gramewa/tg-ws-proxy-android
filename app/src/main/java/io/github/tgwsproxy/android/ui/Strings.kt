@@ -100,10 +100,8 @@ data class AppStrings(
     val toastUpToDate: String,
     val toastUpdateCheckFailed: String,
     val updateDialogTitle: String,
-    val updateDownloading: String,
-    val updateNeedInstallPerm: String,
+    val updateDownloadHint: String,
     val btnDownloadInstall: String,
-    val btnInstallReady: String,
     val btnOpenGithub: String,
     val btnLater: String,
 
@@ -167,7 +165,7 @@ data class AppStrings(
 
 private val RuStrings = AppStrings(
     appName = "TG WS Proxy",
-    navConnection = "Подключение",
+    navConnection = "Прокси",
     navSettings = "Настройки",
     navLogs = "Логи",
     navInfo = "Инфо",
@@ -225,7 +223,7 @@ private val RuStrings = AppStrings(
     batteryAction = "Отключить ограничения",
 
     sectionMtproto = "Подключение MTProto и Fake TLS",
-    labelHost = "IP-адрес прослушивания",
+    labelHost = "IP-адрес (Host)",
     labelPort = "Порт",
     labelSecret = "Секретный ключ (32 hex)",
     btnGenerateSecret = "Сгенерировать",
@@ -262,10 +260,8 @@ private val RuStrings = AppStrings(
     toastUpToDate = "Установлена последняя версия",
     toastUpdateCheckFailed = "Не удалось проверить обновления. Проверьте сеть.",
     updateDialogTitle = "Доступно обновление",
-    updateDownloading = "Загрузка APK...",
-    updateNeedInstallPerm = "Разрешите установку из этого источника и вернитесь в приложение",
-    btnDownloadInstall = "Скачать и установить",
-    btnInstallReady = "Установить APK",
+    updateDownloadHint = "APK скачается через браузер — после загрузки нажмите «Открыть» для обновления",
+    btnDownloadInstall = "Скачать обновление (APK)",
     btnOpenGithub = "На GitHub",
     btnLater = "Позже",
 
@@ -323,13 +319,13 @@ private val RuStrings = AppStrings(
     infoFakeTlsTitle = "Fake TLS (ee-secret)",
     infoFakeTlsBody = "Если указать домен маскировки (например example.com), прокси формирует ee-секрет и отвечает на TLS ClientHello, маскируясь под указанный сайт (с профилированием размера записей и защитой от replay-атак).",
     infoUpstreamTitle = "Репозитории проекта",
-    infoAndroidRepoBtn = "Открыть Gramewa/tg-ws-proxy-android на GitHub",
-    infoUpstreamBtn = "Открыть оригинал Flowseal/tg-ws-proxy",
+    infoAndroidRepoBtn = "GitHub: Gramewa/tg-ws-proxy-android",
+    infoUpstreamBtn = "GitHub: Flowseal/tg-ws-proxy",
 )
 
 private val EnStrings = AppStrings(
     appName = "TG WS Proxy",
-    navConnection = "Connection",
+    navConnection = "Proxy",
     navSettings = "Settings",
     navLogs = "Logs",
     navInfo = "Info",
@@ -387,7 +383,7 @@ private val EnStrings = AppStrings(
     batteryAction = "Disable battery restrictions",
 
     sectionMtproto = "MTProto & Fake TLS",
-    labelHost = "Listen IP address",
+    labelHost = "Listen IP (Host)",
     labelPort = "Port",
     labelSecret = "Secret (32 hex chars)",
     btnGenerateSecret = "Generate",
@@ -424,10 +420,8 @@ private val EnStrings = AppStrings(
     toastUpToDate = "You are on the latest version",
     toastUpdateCheckFailed = "Failed to check for updates. Check your network.",
     updateDialogTitle = "Update Available",
-    updateDownloading = "Downloading APK...",
-    updateNeedInstallPerm = "Allow app installs from this source and return",
-    btnDownloadInstall = "Download & Install",
-    btnInstallReady = "Install APK",
+    updateDownloadHint = "The APK will download in your browser — tap Open when complete to update",
+    btnDownloadInstall = "Download Update (APK)",
     btnOpenGithub = "GitHub",
     btnLater = "Later",
 
@@ -485,8 +479,8 @@ private val EnStrings = AppStrings(
     infoFakeTlsTitle = "Fake TLS (ee-secret)",
     infoFakeTlsBody = "When a masking domain (e.g. example.com) is set, the proxy generates an ee-secret and responds to TLS ClientHellos while mirroring cipher suites, key shares, and record sizing.",
     infoUpstreamTitle = "Project Repositories",
-    infoAndroidRepoBtn = "Open Gramewa/tg-ws-proxy-android on GitHub",
-    infoUpstreamBtn = "Open upstream Flowseal/tg-ws-proxy",
+    infoAndroidRepoBtn = "GitHub: Gramewa/tg-ws-proxy-android",
+    infoUpstreamBtn = "GitHub: Flowseal/tg-ws-proxy",
 )
 
 fun stringsFor(language: String): AppStrings = if (language == "en") EnStrings else RuStrings

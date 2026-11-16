@@ -5,7 +5,9 @@ import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,12 +40,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.tgwsproxy.android.proxy.LogLevel
 import io.github.tgwsproxy.android.proxy.ProxyLogger
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun LogsScreen(strings: AppStrings) {
     val context = LocalContext.current
@@ -91,35 +95,37 @@ fun LogsScreen(strings: AppStrings) {
             modifier = Modifier.fillMaxWidth(),
         )
 
-        Row(
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             FilterChip(
                 selected = showInfo,
                 onClick = { showInfo = !showInfo },
-                label = { Text("INFO") },
+                label = { Text("INFO", maxLines = 1, softWrap = false) },
             )
             FilterChip(
                 selected = showWarn,
                 onClick = { showWarn = !showWarn },
-                label = { Text("WARN") },
+                label = { Text("WARN", maxLines = 1, softWrap = false) },
             )
             FilterChip(
                 selected = showError,
                 onClick = { showError = !showError },
-                label = { Text("ERR") },
+                label = { Text("ERR", maxLines = 1, softWrap = false) },
             )
             FilterChip(
                 selected = showDebug,
                 onClick = { showDebug = !showDebug },
-                label = { Text("DBG") },
+                label = { Text("DBG", maxLines = 1, softWrap = false) },
             )
         }
 
-        Row(
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             OutlinedButton(
                 onClick = {
@@ -127,11 +133,16 @@ fun LogsScreen(strings: AppStrings) {
                     copyToClipboard(context, "TG WS Proxy Logs", text)
                     Toast.makeText(context, strings.toastLogsCopied, Toast.LENGTH_SHORT).show()
                 },
-                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text(strings.btnCopyLogs, maxLines = 1)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = strings.btnCopyLogs,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    softWrap = false,
+                )
             }
             OutlinedButton(
                 onClick = {
@@ -143,19 +154,29 @@ fun LogsScreen(strings: AppStrings) {
                     }
                     context.startActivity(Intent.createChooser(intent, strings.btnShareLogs))
                 },
-                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text(strings.btnShareLogs, maxLines = 1)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = strings.btnShareLogs,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    softWrap = false,
+                )
             }
             OutlinedButton(
                 onClick = { ProxyLogger.clear() },
-                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text(strings.btnClearLogs, maxLines = 1)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = strings.btnClearLogs,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    softWrap = false,
+                )
             }
         }
 

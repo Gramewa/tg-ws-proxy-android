@@ -1,3 +1,7 @@
+# Preserve readable open-source symbol names (avoids Play Protect obfuscation heuristics)
+-dontobfuscate
+-keepattributes SourceFile,LineNumberTable
+
 # OkHttp
 -dontwarn okhttp3.**
 -dontwarn okio.**
