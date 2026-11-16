@@ -12,6 +12,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.min
 
 interface ClientStream {
@@ -363,7 +364,7 @@ object ProxyBridge {
         var upPackets = 0L
         var downPackets = 0L
         val startTime = System.currentTimeMillis()
-        @Volatile var closeReason = "normal"
+        val closeReason = AtomicReference("normal")
 
         try {
             coroutineScope {
@@ -402,9 +403,7 @@ object ProxyBridge {
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        if (closeReason == "normal") {
-                            closeReason = "client: ${e.javaClass.simpleName}"
-                        }
+                        closeReason.compareAndSet("normal", "client: ${e.javaClass.simpleName}")
                         ProxyLogger.d("[$label] tcp->ws ended: ${e.message}")
                     } finally {
                         ws.closeQuietly()
@@ -416,9 +415,7 @@ object ProxyBridge {
                         while (true) {
                             val data = ws.recv()
                             if (data == null) {
-                                if (closeReason == "normal") {
-                                    closeReason = "upstream: ws_close"
-                                }
+                                closeReason.compareAndSet("normal", "upstream: ws_close")
                                 break
                             }
                             val n = data.size.toLong()
@@ -432,13 +429,9 @@ object ProxyBridge {
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: EOFException) {
-                        if (closeReason == "normal") {
-                            closeReason = "upstream: tcp_reset"
-                        }
+                        closeReason.compareAndSet("normal", "upstream: tcp_reset")
                     } catch (e: Exception) {
-                        if (closeReason == "normal") {
-                            closeReason = "upstream: ${e.javaClass.simpleName}"
-                        }
+                        closeReason.compareAndSet("normal", "upstream: ${e.javaClass.simpleName}")
                         ProxyLogger.d("[$label] ws->tcp ended: ${e.message}")
                     } finally {
                         stream.close()
@@ -451,7 +444,7 @@ object ProxyBridge {
         } finally {
             val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
             ProxyLogger.i(
-                "[$label] $dcTag WS session closed ($closeReason): " +
+                "[$label] $dcTag WS session closed (${closeReason.get()}): " +
                     "^${humanBytes(upBytes)} ($upPackets pkts) " +
                     "v${humanBytes(downBytes)} ($downPackets pkts) in ${"%.1f".format(elapsedSec)}s"
             )

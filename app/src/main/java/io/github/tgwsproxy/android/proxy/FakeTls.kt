@@ -377,18 +377,21 @@ object FakeTls {
             val input = sock.getInputStream()
             val flight = ByteArrayOutputStream()
             val buf = ByteArray(16384)
+            var result: Int? = null
             while (true) {
                 val rem = (deadline - System.currentTimeMillis()).toInt()
-                if (rem <= 0) return@withContext null
+                if (rem <= 0) break
                 sock.soTimeout = rem
                 val n = input.read(buf)
-                if (n <= 0) return@withContext null
+                if (n <= 0) break
                 flight.write(buf, 0, n)
                 val len = firstAppdataRecordLen(flight.toByteArray())
                 if (len != null) {
-                    return@withContext if (len == 0) null else len
+                    result = if (len == 0) null else len
+                    break
                 }
             }
+            result
         } catch (e: CancellationException) {
             throw e
         } catch (exc: Exception) {

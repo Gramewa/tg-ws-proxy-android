@@ -229,7 +229,7 @@ class ProxyProtocolTest {
 
     @Test
     fun cfH2MtProtoFramingStripsAndAddsPaddingCleanly() {
-        val body = ByteArray(28) { (it + 1).toByte() } // multiple of 4, >= 24
+        val body = ByteArray(40) { (it + 1).toByte() } // 24 + 16*1 aligned MTProto encrypted payload
         val encoded = CfH2Pool.encodeMtProtoReply(body, HandshakeCrypto.PROTO_TAG_SECURE)
 
         val key = ByteArray(32) { 0x42 }
