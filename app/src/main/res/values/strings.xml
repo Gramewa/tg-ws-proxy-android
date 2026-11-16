@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TG WS Proxy</string>
+    <string name="qs_tile_label">TG WS Proxy</string>
+    <string name="notification_channel_name">Proxy Service</string>
+    <string name="notification_channel_desc">Status notification for the local MTProto WebSocket proxy</string>
+</resources>

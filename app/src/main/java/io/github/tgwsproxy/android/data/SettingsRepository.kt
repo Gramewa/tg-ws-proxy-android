@@ -1,0 +1,128 @@
+package io.github.tgwsproxy.android.data
+
+import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import io.github.tgwsproxy.android.proxy.generateSecretHex
+import io.github.tgwsproxy.android.proxy.isValidSecretHex
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import java.util.Locale
+
+private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "proxy_settings")
+
+class SettingsRepository(private val context: Context) {
+
+    private object Keys {
+        val HOST = stringPreferencesKey("host")
+        val PORT = intPreferencesKey("port")
+        val SECRET = stringPreferencesKey("secret")
+        val DC_IP_RULES = stringPreferencesKey("dc_ip_rules")
+        val CFPROXY_ENABLED = booleanPreferencesKey("cfproxy_enabled")
+        val CFPROXY_H2_MEDIA = booleanPreferencesKey("cfproxy_h2_media")
+        val CFPROXY_CUSTOM_ENABLED = booleanPreferencesKey("cfproxy_custom_enabled")
+        val CFPROXY_CUSTOM_DOMAINS = stringPreferencesKey("cfproxy_custom_domains")
+        val CFWORKER_DOMAINS = stringPreferencesKey("cfworker_domains")
+        val DISABLE_SECURE = booleanPreferencesKey("disable_secure")
+        val FAKE_TLS_DOMAIN = stringPreferencesKey("fake_tls_domain")
+        val BUFFER_KB = intPreferencesKey("buffer_kb")
+        val POOL_SIZE = intPreferencesKey("pool_size")
+        val VERBOSE_LOGGING = booleanPreferencesKey("verbose_logging")
+        val PROXY_PROTOCOL = booleanPreferencesKey("proxy_protocol")
+        val FORCE_TEST_DC = booleanPreferencesKey("force_test_dc")
+        val AUTO_START_ON_BOOT = booleanPreferencesKey("auto_start_on_boot")
+        val KEEP_WAKE_LOCK = booleanPreferencesKey("keep_wake_lock")
+        val THEME_MODE = stringPreferencesKey("theme_mode")
+        val DYNAMIC_COLORS = booleanPreferencesKey("dynamic_colors")
+        val LANGUAGE = stringPreferencesKey("language")
+    }
+
+    private fun defaultLanguage(): String {
+        val lang = Locale.getDefault().language.lowercase()
+        return if (lang == "ru" || lang == "be" || lang == "uk" || lang == "kk") "ru" else "en"
+    }
+
+    val settingsFlow: Flow<AppSettings> = context.dataStore.data.map { prefs ->
+        AppSettings(
+            host = prefs[Keys.HOST] ?: "127.0.0.1",
+            port = prefs[Keys.PORT] ?: 1443,
+            secret = prefs[Keys.SECRET] ?: "",
+            dcIpRules = prefs[Keys.DC_IP_RULES] ?: AppSettings.DEFAULT_DC_RULES,
+            cfproxyEnabled = prefs[Keys.CFPROXY_ENABLED] ?: true,
+            cfproxyH2Media = prefs[Keys.CFPROXY_H2_MEDIA] ?: true,
+            cfproxyCustomDomainsEnabled = prefs[Keys.CFPROXY_CUSTOM_ENABLED] ?: false,
+            cfproxyCustomDomains = prefs[Keys.CFPROXY_CUSTOM_DOMAINS] ?: "",
+            cfworkerDomains = prefs[Keys.CFWORKER_DOMAINS] ?: "",
+            disableSecure = prefs[Keys.DISABLE_SECURE] ?: false,
+            fakeTlsDomain = prefs[Keys.FAKE_TLS_DOMAIN] ?: "",
+            bufferKb = prefs[Keys.BUFFER_KB] ?: 256,
+            poolSize = prefs[Keys.POOL_SIZE] ?: 4,
+            verboseLogging = prefs[Keys.VERBOSE_LOGGING] ?: false,
+            proxyProtocol = prefs[Keys.PROXY_PROTOCOL] ?: false,
+            forceTestDc = prefs[Keys.FORCE_TEST_DC] ?: false,
+            autoStartOnBoot = prefs[Keys.AUTO_START_ON_BOOT] ?: false,
+            keepWakeLock = prefs[Keys.KEEP_WAKE_LOCK] ?: false,
+            themeMode = prefs[Keys.THEME_MODE] ?: "auto",
+            dynamicColors = prefs[Keys.DYNAMIC_COLORS] ?: true,
+            language = prefs[Keys.LANGUAGE] ?: defaultLanguage(),
+        )
+    }
+
+    suspend fun ensureInitialized(): AppSettings {
+        var result: AppSettings? = null
+        context.dataStore.edit { prefs ->
+            val currentSecret = prefs[Keys.SECRET].orEmpty()
+            if (!isValidSecretHex(currentSecret)) {
+                prefs[Keys.SECRET] = generateSecretHex()
+            }
+            if (prefs[Keys.LANGUAGE] == null) {
+                prefs[Keys.LANGUAGE] = defaultLanguage()
+            }
+        }
+        result = settingsFlow.first()
+        return result
+    }
+
+    suspend fun update(transform: (AppSettings) -> AppSettings): AppSettings {
+        val current = ensureInitialized()
+        val updated = transform(current)
+        save(updated)
+        return updated
+    }
+
+    suspend fun save(settings: AppSettings) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.HOST] = settings.host
+            prefs[Keys.PORT] = settings.port
+            prefs[Keys.SECRET] = if (isValidSecretHex(settings.secret)) {
+                settings.secret.lowercase()
+            } else {
+                generateSecretHex()
+            }
+            prefs[Keys.DC_IP_RULES] = settings.dcIpRules
+            prefs[Keys.CFPROXY_ENABLED] = settings.cfproxyEnabled
+            prefs[Keys.CFPROXY_H2_MEDIA] = settings.cfproxyH2Media
+            prefs[Keys.CFPROXY_CUSTOM_ENABLED] = settings.cfproxyCustomDomainsEnabled
+            prefs[Keys.CFPROXY_CUSTOM_DOMAINS] = settings.cfproxyCustomDomains
+            prefs[Keys.CFWORKER_DOMAINS] = settings.cfworkerDomains
+            prefs[Keys.DISABLE_SECURE] = settings.disableSecure
+            prefs[Keys.FAKE_TLS_DOMAIN] = settings.fakeTlsDomain
+            prefs[Keys.BUFFER_KB] = settings.bufferKb
+            prefs[Keys.POOL_SIZE] = settings.poolSize
+            prefs[Keys.VERBOSE_LOGGING] = settings.verboseLogging
+            prefs[Keys.PROXY_PROTOCOL] = settings.proxyProtocol
+            prefs[Keys.FORCE_TEST_DC] = settings.forceTestDc
+            prefs[Keys.AUTO_START_ON_BOOT] = settings.autoStartOnBoot
+            prefs[Keys.KEEP_WAKE_LOCK] = settings.keepWakeLock
+            prefs[Keys.THEME_MODE] = settings.themeMode
+            prefs[Keys.DYNAMIC_COLORS] = settings.dynamicColors
+            prefs[Keys.LANGUAGE] = settings.language
+        }
+    }
+}
