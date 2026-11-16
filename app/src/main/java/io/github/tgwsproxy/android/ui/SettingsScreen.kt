@@ -2,7 +2,10 @@ package io.github.tgwsproxy.android.ui
 
 import android.os.Build
 import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,12 +16,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -41,12 +46,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.tgwsproxy.android.BuildConfig
 import io.github.tgwsproxy.android.data.AppSettings
 import io.github.tgwsproxy.android.proxy.CFPROXY_DEFAULT_DOMAINS
 import io.github.tgwsproxy.android.proxy.ConnectivityTester
@@ -58,6 +65,7 @@ import io.github.tgwsproxy.android.proxy.isValidIpv4
 import io.github.tgwsproxy.android.proxy.isValidSecretHex
 import io.github.tgwsproxy.android.proxy.parseDcIpRules
 import io.github.tgwsproxy.android.service.ProxyController
+import io.github.tgwsproxy.android.update.AppUpdater
 import kotlinx.coroutines.launch
 
 @Composable
@@ -66,6 +74,7 @@ fun SettingsScreen(strings: AppStrings) {
     val scope = rememberCoroutineScope()
     val saved by ProxyController.settings.collectAsStateWithLifecycle()
     val isRunning by ProxyController.isRunning.collectAsStateWithLifecycle()
+    val isCheckingUpdate by AppUpdater.isChecking.collectAsStateWithLifecycle()
 
     var draft by remember { mutableStateOf(saved) }
     var portText by remember { mutableStateOf(saved.port.toString()) }
@@ -85,13 +94,26 @@ fun SettingsScreen(strings: AppStrings) {
     LaunchedEffect(saved.disableSecure) {
         draft = draft.copy(disableSecure = saved.disableSecure)
     }
-
     LaunchedEffect(saved.cfproxyEnabled) {
         draft = draft.copy(cfproxyEnabled = saved.cfproxyEnabled)
     }
-
     LaunchedEffect(saved.cfproxyH2Media) {
         draft = draft.copy(cfproxyH2Media = saved.cfproxyH2Media)
+    }
+    LaunchedEffect(saved.simpleMode) {
+        draft = draft.copy(simpleMode = saved.simpleMode)
+    }
+    LaunchedEffect(saved.colorPalette) {
+        draft = draft.copy(colorPalette = saved.colorPalette)
+    }
+    LaunchedEffect(saved.dynamicColors) {
+        draft = draft.copy(dynamicColors = saved.dynamicColors)
+    }
+    LaunchedEffect(saved.themeMode) {
+        draft = draft.copy(themeMode = saved.themeMode)
+    }
+    LaunchedEffect(saved.language) {
+        draft = draft.copy(language = saved.language)
     }
 
     var testingCf by remember { mutableStateOf(false) }
@@ -107,9 +129,7 @@ fun SettingsScreen(strings: AppStrings) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (validationError != null) {
-            ElevatedCard(
-                shape = RoundedCornerShape(12.dp),
-            ) {
+            ElevatedCard(shape = RoundedCornerShape(12.dp)) {
                 Text(
                     text = validationError.orEmpty(),
                     color = MaterialTheme.colorScheme.error,
@@ -323,7 +343,7 @@ fun SettingsScreen(strings: AppStrings) {
             }
         }
 
-        // Section 5: Logs & Performance (mirrors desktop Flowseal UI)
+        // Section 5: Logs & Performance
         SectionCard(title = strings.sectionLogsPerf) {
             SettingsSwitchRow(
                 title = strings.labelVerbose,
@@ -359,8 +379,61 @@ fun SettingsScreen(strings: AppStrings) {
             }
         }
 
-        // Section 6: Interface & System
+        // Section 6: Updates
+        SectionCard(title = strings.sectionUpdates) {
+            SettingsSwitchRow(
+                title = strings.labelAutoCheckUpdates,
+                checked = draft.checkUpdatesOnStartup,
+                onCheckedChange = { draft = draft.copy(checkUpdatesOnStartup = it) },
+            )
+            OutlinedButton(
+                onClick = {
+                    if (isCheckingUpdate) return@OutlinedButton
+                    scope.launch {
+                        val found = AppUpdater.checkForUpdates(
+                            currentVersion = BuildConfig.VERSION_NAME,
+                            manual = true,
+                        )
+                        if (found == null) {
+                            val msg = if (AppUpdater.lastCheckStatus.value == "error") {
+                                strings.toastUpdateCheckFailed
+                            } else {
+                                strings.toastUpToDate
+                            }
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                enabled = !isCheckingUpdate,
+            ) {
+                if (isCheckingUpdate) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(strings.checkingUpdates)
+                } else {
+                    Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("${strings.btnCheckUpdatesNow} (v${BuildConfig.VERSION_NAME})")
+                }
+            }
+        }
+
+        // Section 7: Interface & System
         SectionCard(title = strings.sectionInterfaceSystem) {
+            Text(strings.labelInterfaceMode, style = MaterialTheme.typography.labelLarge)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = draft.simpleMode,
+                    onClick = { draft = draft.copy(simpleMode = true) },
+                    label = { Text(strings.modeSimple) },
+                )
+                FilterChip(
+                    selected = !draft.simpleMode,
+                    onClick = { draft = draft.copy(simpleMode = false) },
+                    label = { Text(strings.modeExpert) },
+                )
+            }
+
             Text(strings.labelLanguage, style = MaterialTheme.typography.labelLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
@@ -392,6 +465,38 @@ fun SettingsScreen(strings: AppStrings) {
                     onClick = { draft = draft.copy(themeMode = "dark") },
                     label = { Text(strings.themeDark) },
                 )
+            }
+
+            Text(strings.labelPalette, style = MaterialTheme.typography.labelLarge)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for (opt in AvailablePalettes) {
+                    val paletteTitle = when (opt.id) {
+                        "emerald" -> strings.paletteEmerald
+                        "amethyst" -> strings.paletteAmethyst
+                        "sunset" -> strings.paletteSunset
+                        else -> strings.paletteOcean
+                    }
+                    FilterChip(
+                        selected = !draft.dynamicColors && draft.colorPalette == opt.id,
+                        onClick = {
+                            draft = draft.copy(colorPalette = opt.id, dynamicColors = false)
+                        },
+                        leadingIcon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .clip(CircleShape)
+                                    .background(opt.previewColor),
+                            )
+                        },
+                        label = { Text(paletteTitle, maxLines = 1) },
+                    )
+                }
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

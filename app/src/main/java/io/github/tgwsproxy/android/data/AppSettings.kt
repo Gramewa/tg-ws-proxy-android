@@ -27,8 +27,13 @@ data class AppSettings(
     val autoStartOnBoot: Boolean = false,
     val keepWakeLock: Boolean = false,
     val themeMode: String = "auto",
-    val dynamicColors: Boolean = true,
+    val colorPalette: String = "ocean",
+    val dynamicColors: Boolean = false,
     val language: String = "ru",
+    val simpleMode: Boolean = true,
+    val checkUpdatesOnStartup: Boolean = true,
+    val postponedUpdateVersion: String = "",
+    val postponedUpdateUntilMs: Long = 0L,
 ) {
     companion object {
         const val DEFAULT_DC_RULES = "2:149.154.167.220\n4:149.154.167.220"

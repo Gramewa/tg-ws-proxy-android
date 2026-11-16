@@ -1,9 +1,11 @@
 package io.github.tgwsproxy.android.proxy
 
+import io.github.tgwsproxy.android.update.AppUpdater
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
@@ -281,5 +283,49 @@ class ProxyProtocolTest {
         val eeCfg = noSecureCfg.copy(secret = "00112233445566778899aabbccddeeff", fakeTlsDomain = "example.com")
         val link = buildTelegramProxyLink(eeCfg, "127.0.0.1")
         assertTrue(link.startsWith("tg://proxy?server=127.0.0.1&port=1443&secret=ee00112233445566778899aabbccddeeff"))
+    }
+
+    @Test
+    fun appUpdaterVersionComparisonAndJsonParsing() {
+        assertTrue(AppUpdater.isNewerVersion("1.0.0", "v1.1.0"))
+        assertTrue(AppUpdater.isNewerVersion("1.1.0-debug", "v1.1.1"))
+        assertTrue(AppUpdater.isNewerVersion("1.2.0", "1.10.0"))
+        assertFalse(AppUpdater.isNewerVersion("1.1.0", "v1.1.0"))
+        assertFalse(AppUpdater.isNewerVersion("1.2.0", "v1.1.9"))
+
+        val releaseJson = """
+            {
+              "tag_name": "v1.1.0",
+              "name": "TG WS Proxy Android v1.1.0",
+              "body": "Добавлено автообновление и Простой режим.",
+              "html_url": "https://github.com/Gramewa/tg-ws-proxy-android/releases/tag/v1.1.0",
+              "draft": false,
+              "prerelease": false,
+              "assets": [
+                {
+                  "name": "tg-ws-proxy-android-v1.1.0-debug.apk",
+                  "browser_download_url": "https://example.com/debug.apk",
+                  "size": 1000
+                },
+                {
+                  "name": "tg-ws-proxy-android-v1.1.0.apk",
+                  "browser_download_url": "https://example.com/release.apk",
+                  "size": 1700000
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val parsed = AppUpdater.parseReleaseJson(releaseJson)
+        assertNotNull(parsed)
+        parsed!!
+        assertEquals("1.1.0", parsed.version)
+        assertEquals("v1.1.0", parsed.tagName)
+        assertEquals("tg-ws-proxy-android-v1.1.0.apk", parsed.apkFileName)
+        assertEquals("https://example.com/release.apk", parsed.apkDownloadUrl)
+        assertEquals(1700000L, parsed.apkSizeBytes)
+
+        val draftJson = """{"tag_name":"v1.2.0","draft":true,"prerelease":false,"assets":[]}"""
+        assertNull(AppUpdater.parseReleaseJson(draftJson))
     }
 }

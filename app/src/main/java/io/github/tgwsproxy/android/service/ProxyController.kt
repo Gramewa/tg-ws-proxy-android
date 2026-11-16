@@ -167,6 +167,53 @@ object ProxyController {
         }
     }
 
+    fun setSimpleModeAsync(simple: Boolean) {
+        scope.launch {
+            updateSettings(restartIfRunning = false) { it.copy(simpleMode = simple) }
+        }
+    }
+
+    fun cyclePaletteAsync() {
+        val order = listOf("ocean", "emerald", "amethyst", "sunset")
+        scope.launch {
+            updateSettings(restartIfRunning = false) { cur ->
+                val idx = order.indexOf(cur.colorPalette)
+                val next = order[(idx + 1) % order.size]
+                cur.copy(colorPalette = next, dynamicColors = false)
+            }
+        }
+    }
+
+    fun cycleThemeAsync() {
+        val order = listOf("auto", "dark", "light")
+        scope.launch {
+            updateSettings(restartIfRunning = false) { cur ->
+                val idx = order.indexOf(cur.themeMode)
+                val next = order[(idx + 1) % order.size]
+                cur.copy(themeMode = next)
+            }
+        }
+    }
+
+    fun toggleLanguageAsync() {
+        scope.launch {
+            updateSettings(restartIfRunning = false) { cur ->
+                cur.copy(language = if (cur.language == "ru") "en" else "ru")
+            }
+        }
+    }
+
+    fun postponeUpdateAsync(version: String, untilMs: Long) {
+        scope.launch {
+            updateSettings(restartIfRunning = false) { cur ->
+                cur.copy(
+                    postponedUpdateVersion = version,
+                    postponedUpdateUntilMs = untilMs,
+                )
+            }
+        }
+    }
+
     fun clearError() {
         _lastError.value = null
     }

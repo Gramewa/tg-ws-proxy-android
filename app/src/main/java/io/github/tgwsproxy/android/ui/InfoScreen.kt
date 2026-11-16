@@ -76,10 +76,25 @@ fun InfoScreen(strings: AppStrings) {
                     onClick = {
                         val intent = Intent(
                             Intent.ACTION_VIEW,
+                            Uri.parse("https://github.com/Gramewa/tg-ws-proxy-android"),
+                        )
+                        runCatching { context.startActivity(intent) }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(strings.infoAndroidRepoBtn)
+                }
+                OutlinedButton(
+                    onClick = {
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
                             Uri.parse("https://github.com/Flowseal/tg-ws-proxy"),
                         )
                         runCatching { context.startActivity(intent) }
                     },
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
