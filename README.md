@@ -1,56 +1,54 @@
+<div align="center">
+
 # TG WS Proxy Android
 
-Чистый нативный Android-порт локального MTProto WebSocket-прокси **[Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)** на **Kotlin + Coroutines + Jetpack Compose (Material 3)** без NDK/Rust и под лицензией **MIT**.
+[![Release](https://img.shields.io/github/v/release/Aethrus/tg-ws-proxy-android?style=for-the-badge&logo=github)](https://github.com/Aethrus/tg-ws-proxy-android/releases/latest)
+[![Android](https://img.shields.io/badge/Android-8.0%2B%20(API%2026%2B)-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Aethrus/tg-ws-proxy-android/releases/latest)
+[![Kotlin](https://img.shields.io/badge/Kotlin-Jetpack%20Compose%20M3-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://github.com/Aethrus/tg-ws-proxy-android)
+[![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 
-Проект воспроизводит актуальный протокол оригинального десктопного проекта (ветка `main` / `v1.11.4+`):
-- Прямой пул WebSocket-соединений к датацентрам Telegram (`DC → IP`) с поддержкой **SNI-fronting**.
-- **Cloudflare Proxy** fallback с автоматическим обновлением и проверкой пула доменов, а также поддержкой пользовательских доменов.
-- **HTTP/2 мультиплексирование медиа** (`CfH2Pool`) для быстрой загрузки фото/видео/файлов через Cloudflare.
-- **Cloudflare Worker** fallback (`/apiws?dst=...&dc=...`) с пулом подключений.
-- **Переключатель «Выключить TLS для CF-прокси и CF-worker»** (аналог флага `--no-secure` / порт `80` вместо `443`) прямо на главном экране и в разделе настроек **«Логи и производительность»**.
-- **Fake TLS (`ee-secret`)** с HMAC-SHA256 проверкой `ClientHello`, зеркалированием cipher suites / key shares (включая `X25519MLKEM768`), профилированием размера записей маскируемого сайта, защитой от replay-атак и прозрачным проксированием на сайт маскировки при активной проверке.
-- Поддержка тестовых DC (`10001+` и `--force-test-dc`), `PROXY protocol v1`, проверка доступности маршрутов (`Test`), Foreground Service, плитка быстрых настроек (Quick Settings Tile) и автозапуск после перезагрузки.
+**Чистый нативный Android-форк локального MTProto WebSocket-прокси [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)**
 
----
+[⬇️ Скачать последнюю версию APK](https://github.com/Aethrus/tg-ws-proxy-android/releases/latest)
 
-## Как получить готовый APK через GitHub Actions (без установки Android Studio на ПК)
-
-1. Создайте новый репозиторий на GitHub (например `tg-ws-proxy-android`).
-2. Загрузите содержимое этой папки в ветку `main`:
-   ```bash
-   git add .
-   git commit -m "Initial release: pure Kotlin TG WS Proxy Android"
-   git branch -M main
-   git remote add origin https://github.com/<ВАШ_НИК>/tg-ws-proxy-android.git
-   git push -u origin main
-   ```
-3. Перейдите на вкладку **Actions** в вашем репозитории на GitHub — workflow **`Build Android APK`** автоматически запустит unit-тесты и соберёт оба APK:
-   - `tg-ws-proxy-android-release.apk`
-   - `tg-ws-proxy-android-debug.apk`
-4. Скачайте архив **`tg-ws-proxy-android-apks`** из блока **Artifacts** завершённой сборки.
-5. *(По желанию)* Чтобы получать APK прямо во вкладке **Releases**, создайте и отправьте тег вида `v*`:
-   ```bash
-   git tag v1.0.0
-   git push origin v1.0.0
-   ```
-6. *(По желанию, для подписи вашим ключом)* Добавьте в `Settings → Secrets and variables → Actions` вашего репозитория секреты:
-   - `KEYSTORE_BASE64` — ваш `.jks`/`.keystore` в Base64
-   - `KEYSTORE_PASSWORD`
-   - `KEY_ALIAS`
-   - `KEY_PASSWORD`
-   Если секреты не заданы, workflow автоматически соберёт полностью рабочий и готовый к установке Release APK с тестовой подписью.
+</div>
 
 ---
 
-## Быстрый старт на смартфоне
+## Возможности
 
-1. Установите `tg-ws-proxy-android-release.apk`.
-2. Откройте приложение и при необходимости включите тумблер **«Выключить TLS для CF-прокси и CF-worker»** прямо на главном экране (использует порт `80`, помогает при блокировке TLS-рукопожатий к Cloudflare).
-3. Нажмите **«Запустить прокси»**.
-4. Нажмите **«Подключить в Telegram»** (поддерживаются официальный Telegram, AyuGram, NekoGram, Plus Messenger и др.) или **«Скопировать ссылку»**.
+Приложение написано с нуля на **Kotlin + Coroutines + Jetpack Compose (Material 3)** без тяжёлых нативных библиотек и полностью повторяет актуальный протокол десктопного `Flowseal/tg-ws-proxy` (`v1.11.4+`):
+
+- **Быстрый тумблер «Выключить TLS для CF-прокси и CF-worker»** (порт `80` вместо `443`, аналог `--no-secure`) — вынесен прямо на главный экран и синхронизирован с разделом **Настройки → Логи и производительность**. При переключении на работающем прокси режим применяется мгновенно.
+- **Прямой пул WebSocket-соединений (`DC → IP`)** с поддержкой **SNI-fronting** и автоматическим переключением при сбоях.
+- **Cloudflare Proxy fallback** с автообновлением списка доменов и возможностью задать собственные домены.
+- **Мультиплексирование медиа через HTTP/2 (`CfH2Pool`)** для быстрой загрузки фото, видео и файлов через Cloudflare.
+- **Cloudflare Worker fallback** с пулом соединений (`/apiws?dst=...&dc=...`).
+- **Fake TLS (`ee-secret`)** с HMAC-SHA256 проверкой `ClientHello`, поддержкой `X25519MLKEM768`, профилированием маскируемого сайта, защитой от replay-атак и прозрачным проксированием активных проверок.
+- **Тест доступности маршрутов (`Проверить`)** прямо в настройках с учётом выбранного режима порта (`443 TLS` / `80 HTTP`).
+- **Фоновая работа:** `Foreground Service` со статистикой трафика и кнопками в уведомлении, плитка быстрых настроек (Quick Settings Tile), автозапуск после загрузки и опциональный WakeLock / Wi-Fi Lock.
+- **Два языка и темы:** русский / английский, светлая / тёмная тема и Dynamic Colors (Android 12+).
+
+---
+
+## Установка и быстрый старт
+
+1. Скачайте актуальный `tg-ws-proxy-android-*.apk` со страницы **[Releases](https://github.com/Aethrus/tg-ws-proxy-android/releases/latest)** и установите на Android-устройство.
+2. Откройте **TG WS Proxy**.
+3. Если подключения через Cloudflare не проходят по TLS (ошибки/таймауты), включите на главном экране переключатель **«Выключить TLS для CF-прокси и CF-worker»**.
+4. Нажмите **«Запустить прокси»**.
+5. Нажмите **«Подключить в Telegram»** (поддерживаются официальный Telegram, AyuGram, NekoGram, Plus Messenger и др.) или **«Скопировать ссылку»**, отправьте в *Избранное* и нажмите по ней.
+
+---
+
+## Решение частых проблем
+
+- **Не подключается или зависает загрузка:** включите тумблер **«Выключить TLS для CF-прокси и CF-worker»** на главном экране.
+- **Не грузятся фото/видео, но работает CF-прокси:** откройте **Настройки → Датацентры Telegram (DC → IP)** и нажмите **«Очистить (всё через CF)»**, затем сохраните настройки.
+- **Android останавливает прокси в фоне:** нажмите **«Отключить ограничения»** на карточке энергосбережения на главном экране.
 
 ---
 
 ## Лицензия
 
-Распространяется под лицензией **MIT** (см. [LICENSE](LICENSE)), как и оригинальный проект [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy).
+Проект распространяется под лицензией **MIT** ([LICENSE](LICENSE)) на основе оригинального [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy).

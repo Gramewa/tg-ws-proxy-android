@@ -10,8 +10,11 @@ local.properties
 .DS_Store
 
 # Signing
+keystore/
 *.jks
 *.keystore
+*.p12
+*.pfx
 
 # Logs
 *.log
