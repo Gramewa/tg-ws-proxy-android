@@ -514,7 +514,11 @@ fun SettingsScreen(strings: AppStrings) {
 
         // Section 7: Interface & System
         SectionCard(title = strings.sectionInterfaceSystem) {
-            Text(strings.labelInterfaceMode, style = MaterialTheme.typography.labelLarge)
+            Text(
+                text = strings.labelInterfaceMode,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.labelLarge,
+            )
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -532,7 +536,11 @@ fun SettingsScreen(strings: AppStrings) {
                 )
             }
 
-            Text(strings.labelLanguage, style = MaterialTheme.typography.labelLarge)
+            Text(
+                text = strings.labelLanguage,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.labelLarge,
+            )
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -550,7 +558,11 @@ fun SettingsScreen(strings: AppStrings) {
                 )
             }
 
-            Text(strings.labelTheme, style = MaterialTheme.typography.labelLarge)
+            Text(
+                text = strings.labelTheme,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.labelLarge,
+            )
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -573,7 +585,11 @@ fun SettingsScreen(strings: AppStrings) {
                 )
             }
 
-            Text(strings.labelPalette, style = MaterialTheme.typography.labelLarge)
+            Text(
+                text = strings.labelPalette,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.labelLarge,
+            )
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -703,6 +719,7 @@ private fun SectionCard(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
                 text = title,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )

@@ -1,5 +1,6 @@
 package io.github.tgwsproxy.android.ui
 
+import android.app.Activity
 import android.os.Build
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
@@ -22,7 +24,9 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -32,7 +36,9 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 
 @Immutable
 data class PaletteOption(
@@ -336,7 +342,7 @@ fun rememberHeroPalette(isRunning: Boolean, isTransitioning: Boolean): HeroVisua
             downAccent = cs.tertiary,
         )
         else -> HeroVisualPalette(
-            orbGradient = listOf(cs.surfaceVariant, cs.surface),
+            orbGradient = listOf(cs.primary.copy(alpha = 0.22f), cs.surfaceVariant),
             ringColor = cs.primary.copy(alpha = 0.55f),
             glowColor = cs.primary.copy(alpha = 0.16f),
             upAccent = cs.primary,
@@ -442,6 +448,7 @@ fun GlassCard(
         modifier = modifier,
         shape = shape,
         color = containerColor,
+        contentColor = cs.onSurface,
         border = BorderStroke(1.dp, borderBrush),
     ) {
         Column(
@@ -482,8 +489,19 @@ fun TgWsProxyTheme(
         schemeFor(colorPalette, useDark)
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        content = content,
-    )
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as? Activity)?.window ?: return@SideEffect
+            val controller = WindowCompat.getInsetsController(window, view)
+            controller.isAppearanceLightStatusBars = !useDark
+            controller.isAppearanceLightNavigationBars = !useDark
+        }
+    }
+
+    MaterialTheme(colorScheme = colorScheme) {
+        CompositionLocalProvider(LocalContentColor provides colorScheme.onBackground) {
+            content()
+        }
+    }
 }

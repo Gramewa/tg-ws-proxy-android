@@ -284,6 +284,7 @@ private fun SimpleConnectionView(
         Surface(
             shape = RoundedCornerShape(999.dp),
             color = statusAccent.copy(alpha = 0.14f),
+            contentColor = cs.onSurface,
             border = BorderStroke(1.dp, statusAccent.copy(alpha = 0.36f)),
         ) {
             Row(
@@ -331,6 +332,7 @@ private fun SimpleConnectionView(
                     isRunning -> strings.simpleHeroRunningTitle
                     else -> strings.simpleHeroStoppedTitle
                 },
+                color = cs.onBackground,
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
@@ -482,6 +484,7 @@ private fun SimpleConnectionView(
                     ) {
                         Text(
                             text = strings.simpleBoostTitle,
+                            color = cs.onSurface,
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -560,6 +563,7 @@ private fun SimpleConnectionView(
                 Surface(
                     shape = RoundedCornerShape(999.dp),
                     color = cs.surfaceVariant.copy(alpha = 0.7f),
+                    contentColor = cs.onSurface,
                     border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.2f)),
                     modifier = Modifier.clickable { ProxyController.cyclePaletteAsync() },
                 ) {
@@ -590,6 +594,7 @@ private fun SimpleConnectionView(
                     } else {
                         cs.surfaceVariant.copy(alpha = 0.7f)
                     },
+                    contentColor = if (availableRelease != null) cs.onTertiaryContainer else cs.onSurface,
                     border = BorderStroke(
                         width = 1.dp,
                         color = if (availableRelease != null) {
@@ -725,6 +730,7 @@ private fun ExpertConnectionView(
                                 isRunning -> strings.statusRunning
                                 else -> strings.statusStopped
                             },
+                            color = cs.onSurface,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                         )
@@ -909,6 +915,7 @@ private fun ExpertConnectionView(
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     text = strings.quickSettingsTitle,
+                    color = cs.onSurface,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -1099,7 +1106,8 @@ private fun HeroReactorButton(
             modifier = Modifier
                 .size(orbSize)
                 .clip(CircleShape)
-                .background(Brush.linearGradient(colors = listOf(c0, c1)))
+                .background(cs.surface, CircleShape)
+                .background(Brush.linearGradient(colors = listOf(c0, c1)), CircleShape)
                 .border(1.5.dp, specularBorder, CircleShape)
                 .clickable(
                     interactionSource = interaction,
@@ -1165,6 +1173,7 @@ private fun RouteTopologyStrip(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         color = cs.surfaceVariant.copy(alpha = 0.42f),
+        contentColor = cs.onSurface,
         border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.14f)),
     ) {
         Column(
@@ -1225,6 +1234,7 @@ private fun RouteNodePill(
     Surface(
         shape = RoundedCornerShape(999.dp),
         color = if (lit) cs.tertiary.copy(alpha = 0.14f) else cs.surface.copy(alpha = 0.55f),
+        contentColor = cs.onSurface,
         border = BorderStroke(
             width = 1.dp,
             color = if (lit) cs.tertiary.copy(alpha = 0.45f) else cs.outline.copy(alpha = 0.18f),
@@ -1265,6 +1275,7 @@ private fun TrafficGradientCard(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
         color = accent.copy(alpha = 0.11f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
         border = BorderStroke(1.dp, accent.copy(alpha = 0.25f)),
     ) {
         Row(
@@ -1292,6 +1303,7 @@ private fun TrafficGradientCard(
                 )
                 Text(
                     text = value,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
@@ -1460,11 +1472,13 @@ private fun QuickFooterPill(label: String, onClick: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(999.dp),
         color = cs.surfaceVariant.copy(alpha = 0.7f),
+        contentColor = cs.onSurface,
         border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.2f)),
         modifier = Modifier.clickable(onClick = onClick),
     ) {
         Text(
             text = label,
+            color = cs.onSurface,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
@@ -1481,6 +1495,7 @@ private fun QuickFooterIconPill(icon: ImageVector, label: String, onClick: () ->
     Surface(
         shape = RoundedCornerShape(999.dp),
         color = cs.surfaceVariant.copy(alpha = 0.7f),
+        contentColor = cs.onSurface,
         border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.2f)),
         modifier = Modifier.clickable(onClick = onClick),
     ) {
@@ -1489,9 +1504,10 @@ private fun QuickFooterIconPill(icon: ImageVector, label: String, onClick: () ->
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Icon(icon, contentDescription = label, modifier = Modifier.size(15.dp))
+            Icon(icon, contentDescription = label, tint = cs.primary, modifier = Modifier.size(15.dp))
             Text(
                 text = label,
+                color = cs.onSurface,
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
                 softWrap = false,
@@ -1574,6 +1590,7 @@ private fun MiniStatChip(label: String, value: String, modifier: Modifier = Modi
     Surface(
         modifier = modifier,
         color = cs.surfaceVariant.copy(alpha = if (isDark) 0.55f else 0.72f),
+        contentColor = cs.onSurface,
         border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.14f)),
         shape = RoundedCornerShape(12.dp),
     ) {
@@ -1583,6 +1600,7 @@ private fun MiniStatChip(label: String, value: String, modifier: Modifier = Modi
         ) {
             Text(
                 text = value,
+                color = cs.onSurface,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,

@@ -148,6 +148,7 @@ private fun TgWsProxyRoot() {
         ) {
             Scaffold(
                 containerColor = Color.Transparent,
+                contentColor = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.fillMaxSize(),
                 topBar = {
                     CyberTopBar(
@@ -265,6 +266,7 @@ private fun CyberTopBar(
             Spacer(Modifier.width(10.dp))
             Text(
                 text = title,
+                color = cs.onBackground,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
@@ -332,6 +334,7 @@ private fun FloatingGlassDock(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(26.dp),
             color = cs.surface.copy(alpha = if (isDark) 0.88f else 0.94f),
+            contentColor = cs.onSurface,
             border = BorderStroke(
                 width = 1.dp,
                 brush = Brush.linearGradient(
@@ -402,6 +405,7 @@ private fun InterfaceModePill(
         modifier = modifier,
         shape = RoundedCornerShape(999.dp),
         color = cs.surface.copy(alpha = if (isDark) 0.78f else 0.88f),
+        contentColor = cs.onSurface,
         border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.24f)),
     ) {
         Row(

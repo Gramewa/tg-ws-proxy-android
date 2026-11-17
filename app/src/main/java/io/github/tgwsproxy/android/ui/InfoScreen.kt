@@ -68,6 +68,7 @@ fun InfoScreen(strings: AppStrings) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     text = strings.infoUpstreamTitle,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -126,6 +127,7 @@ private fun InfoCard(title: String, body: String) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
                 text = title,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
