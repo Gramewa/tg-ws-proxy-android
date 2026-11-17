@@ -1,18 +1,12 @@
-# Security Policy
+# Безопасность
 
-## Supported Versions
+Несколько вещей, которые сделаны в приложении, чтобы не светить лишнее наружу:
 
-Only the latest release of **TG WS Proxy Android** on GitHub Releases receives security updates.
+- Прокси по умолчанию слушает только `127.0.0.1:1443` внутри устройства. Если поменять адрес на `0.0.0.0`, в настройках появится предупреждение, что порт станет виден в локальной Wi-Fi сети.
+- Автобэкап Android отключён (`allowBackup="false"`), чтобы секретный ключ не уходил в облачный бэкап.
+- Параметры `secret=` и сторонние домены скрываются перед записью в логи и `logcat`. При копировании ссылки прокси на Android 13+ буфер помечается как чувствительный.
+- Разрешение `usesCleartextTraffic` отключено; проверка обновлений и обновление списка доменов идут только по HTTPS с проверкой домена. Режим 80-го порта работает через обычные TCP-сокеты.
+- При указании домена маскировки Fake TLS проверяется, что он резолвится в публичный IP, а не в `127.0.0.1` или домашнюю подсеть.
+- Для обновлений не запрашивается разрешение на установку чужих APK (`REQUEST_INSTALL_PACKAGES`) — ссылка открывается через обычный браузер.
 
-## Built-in Hardening
-
-- **Localhost binding by default:** The MTProto proxy listens on `127.0.0.1:1443` by default, isolating access to apps on the same device. Selecting `0.0.0.0` shows an explicit warning in Settings.
-- **No cloud backups of credentials:** `android:allowBackup="false"` prevents Android backup extraction of the 32-hex proxy secret and configuration.
-- **Zero cleartext HTTP client traffic:** `android:usesCleartextTraffic="false"` is enforced in `AndroidManifest.xml`; update API calls and `cfproxy-domains.txt` refreshes verify HTTPS certificates and hostnames. (The optional port `80` fallback uses raw TCP `Socket` WebSockets matching upstream `--no-secure`.)
-- **Secret redaction:** Logs (`ProxyLogger` / `DomainCensor`) strip `secret=` parameters and mask non-Telegram domains before writing to the circular buffer or Android `logcat`. Copied `tg://proxy` links are marked `ClipDescription.EXTRA_IS_SENSITIVE` on Android 13+.
-- **SSRF & resource guards:** Fake TLS domain probing and fallback proxying resolve and require public unicast IP addresses, enforce socket timeouts, and bound incoming TLS record / splitter buffer allocations and concurrent client connections.
-- **Trusted update links:** Release update checks only accept HTTPS download URLs hosted on `github.com/Gramewa/tg-ws-proxy-android/` or official GitHub release asset CDNs, without declaring `REQUEST_INSTALL_PACKAGES`.
-
-## Reporting a Vulnerability
-
-Please open a private GitHub Security Advisory on `Gramewa/tg-ws-proxy-android` or report non-sensitive bugs via [GitHub Issues](https://github.com/Gramewa/tg-ws-proxy-android/issues).
+Если найдёте проблему или баг в безопасности, можно создать Security Advisory в репозитории или написать в [Issues](https://github.com/Gramewa/tg-ws-proxy-android/issues).
