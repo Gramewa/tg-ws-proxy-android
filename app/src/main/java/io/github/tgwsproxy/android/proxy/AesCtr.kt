@@ -205,6 +205,10 @@ object HandshakeCrypto {
 }
 
 class MsgSplitter(private val protoInt: Int) {
+    companion object {
+        const val MAX_SPLIT_PACKET_LEN = 4 * 1024 * 1024
+    }
+
     private val cipherBuf = ByteArrayOutputStream()
     private val plainBuf = ByteArrayOutputStream()
     private var disabled = false
@@ -278,7 +282,7 @@ class MsgSplitter(private val protoInt: Int) {
             payloadLen = (first and 0x7F) * 4
             headerLen = 1
         }
-        if (payloadLen <= 0) return 0
+        if (payloadLen <= 0 || payloadLen > MAX_SPLIT_PACKET_LEN) return 0
         val packetLen = headerLen + payloadLen
         return if (avail < packetLen) null else packetLen
     }
@@ -291,7 +295,7 @@ class MsgSplitter(private val protoInt: Int) {
         val b3 = plain[offset + 3].toInt() and 0xFF
         val raw = b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
         val payloadLen = raw and 0x7FFFFFFF
-        if (payloadLen <= 0) return 0
+        if (payloadLen <= 0 || payloadLen > MAX_SPLIT_PACKET_LEN) return 0
         val packetLen = 4 + payloadLen
         return if (avail < packetLen) null else packetLen
     }

@@ -11,6 +11,7 @@ import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
+import java.net.InetAddress
 import java.net.Socket
 import java.security.MessageDigest
 import javax.crypto.Mac
@@ -293,6 +294,12 @@ class ProxyProtocolTest {
         assertFalse(AppUpdater.isNewerVersion("1.1.0", "v1.1.0"))
         assertFalse(AppUpdater.isNewerVersion("1.2.0", "v1.1.9"))
 
+        val trustedApk = "https://github.com/Gramewa/tg-ws-proxy-android/releases/download/v1.1.0/tg-ws-proxy-android-v1.1.0.apk"
+        assertTrue(AppUpdater.isTrustedGithubHttpsUrl(trustedApk))
+        assertFalse(AppUpdater.isTrustedGithubHttpsUrl("http://github.com/Gramewa/tg-ws-proxy-android/releases/download/v1.1.0/a.apk"))
+        assertFalse(AppUpdater.isTrustedGithubHttpsUrl("https://example.com/evil.apk"))
+        assertFalse(AppUpdater.isTrustedGithubHttpsUrl("https://github.com/other/repo/releases/download/v1.0.0/evil.apk"))
+
         val releaseJson = """
             {
               "tag_name": "v1.1.0",
@@ -304,12 +311,17 @@ class ProxyProtocolTest {
               "assets": [
                 {
                   "name": "tg-ws-proxy-android-v1.1.0-debug.apk",
-                  "browser_download_url": "https://example.com/debug.apk",
+                  "browser_download_url": "$trustedApk",
                   "size": 1000
                 },
                 {
+                  "name": "untrusted.apk",
+                  "browser_download_url": "https://example.com/untrusted.apk",
+                  "size": 500
+                },
+                {
                   "name": "tg-ws-proxy-android-v1.1.0.apk",
-                  "browser_download_url": "https://example.com/release.apk",
+                  "browser_download_url": "$trustedApk",
                   "size": 1700000
                 }
               ]
@@ -322,10 +334,30 @@ class ProxyProtocolTest {
         assertEquals("1.1.0", parsed.version)
         assertEquals("v1.1.0", parsed.tagName)
         assertEquals("tg-ws-proxy-android-v1.1.0.apk", parsed.apkFileName)
-        assertEquals("https://example.com/release.apk", parsed.apkDownloadUrl)
+        assertEquals(trustedApk, parsed.apkDownloadUrl)
         assertEquals(1700000L, parsed.apkSizeBytes)
 
         val draftJson = """{"tag_name":"v1.2.0","draft":true,"prerelease":false,"assets":[]}"""
         assertNull(AppUpdater.parseReleaseJson(draftJson))
+    }
+
+    @Test
+    fun securityHardeningRedactsSecretsAndRejectsPrivateMaskingIps() {
+        val logLine = "Connect: tg://proxy?server=127.0.0.1&port=1443&secret=dd00112233445566778899aabbccddeeff"
+        val censored = DomainCensor.censor(logLine)
+        assertFalse(censored.contains("dd001122"))
+        assertTrue(censored.contains("secret=***"))
+
+        assertFalse(FakeTls.isPublicUnicastAddress(InetAddress.getByName("127.0.0.1")))
+        assertFalse(FakeTls.isPublicUnicastAddress(InetAddress.getByName("192.168.1.1")))
+        assertFalse(FakeTls.isPublicUnicastAddress(InetAddress.getByName("10.0.0.1")))
+        assertTrue(FakeTls.isPublicUnicastAddress(InetAddress.getByName("149.154.167.220")))
+
+        // Oversized Intermediate packet header (100 MB) must trigger safe pass-through rather than huge buffering
+        val oversizedPlain = byteArrayOf(0x00, 0x00, 0x40, 0x06) + ByteArray(8)
+        val splitter = MsgSplitter(HandshakeCrypto.PROTO_INTERMEDIATE_INT)
+        val out = splitter.split(oversizedPlain.copyOf(), oversizedPlain)
+        assertEquals(1, out.size)
+        assertEquals(oversizedPlain.size, out[0].size)
     }
 }

@@ -2,6 +2,7 @@ package io.github.tgwsproxy.android.ui
 
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -184,8 +186,9 @@ fun LogsScreen(strings: AppStrings) {
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-            shape = RoundedCornerShape(14.dp),
+            color = Color(0xFF070D17),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)),
+            shape = RoundedCornerShape(18.dp),
         ) {
             if (filtered.isEmpty()) {
                 Box(
@@ -197,7 +200,7 @@ fun LogsScreen(strings: AppStrings) {
                     Text(
                         text = strings.logsEmpty,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = Color(0xFF94A7C2),
                     )
                 }
             } else {
@@ -205,15 +208,15 @@ fun LogsScreen(strings: AppStrings) {
                     state = listState,
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(10.dp),
+                        .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     items(filtered) { entry ->
                         val color = when (entry.level) {
-                            LogLevel.ERROR -> MaterialTheme.colorScheme.error
-                            LogLevel.WARN -> MaterialTheme.colorScheme.secondary
-                            LogLevel.DEBUG -> MaterialTheme.colorScheme.onSurfaceVariant
-                            LogLevel.INFO -> MaterialTheme.colorScheme.onSurface
+                            LogLevel.ERROR -> Color(0xFFF87171)
+                            LogLevel.WARN -> Color(0xFFFBBF24)
+                            LogLevel.DEBUG -> Color(0xFF94A3B8)
+                            LogLevel.INFO -> Color(0xFF7DD3FC)
                         }
                         Text(
                             text = entry.formatLine(),

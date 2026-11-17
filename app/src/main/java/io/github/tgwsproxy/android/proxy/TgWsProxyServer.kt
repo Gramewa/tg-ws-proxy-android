@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicReference
 class TgWsProxyServer {
     companion object {
         private const val BAD_HANDSHAKE_DRAIN_LIMIT = 64 * 1024
+        private const val MAX_CONCURRENT_CLIENTS = 256
         private val random = SecureRandom()
     }
 
@@ -72,11 +73,16 @@ class TgWsProxyServer {
 
         cfRefresher.start(scope, config.cfproxyUserDomains)
 
-        val link = buildTelegramProxyLink(config)
+        val maskedSecret = if (config.secret.length >= 8) {
+            "${config.secret.take(4)}...${config.secret.takeLast(4)}"
+        } else {
+            "***"
+        }
+        val linkPreview = "tg://proxy?server=${getLinkHost(config.host)}&port=${config.port}&secret=***"
         ProxyLogger.i("============================================================")
         ProxyLogger.i("  Telegram MTProto WS Bridge Proxy (Android)")
         ProxyLogger.i("  Listening on   ${config.host}:${config.port}")
-        ProxyLogger.i("  Secret:        ${config.secret}")
+        ProxyLogger.i("  Secret:        $maskedSecret")
         if (config.fakeTlsDomain.isNotBlank()) {
             ProxyLogger.i("  Fake TLS:      ${config.fakeTlsDomain}")
         }
@@ -102,7 +108,7 @@ class TgWsProxyServer {
             ProxyLogger.i("  No secure:     enabled (port 80 for CF proxy/worker)")
         }
         ProxyLogger.i("============================================================")
-        ProxyLogger.i("  Connect: $link")
+        ProxyLogger.i("  Connect: $linkPreview")
         ProxyLogger.i("============================================================")
 
         if (config.fakeTlsDomain.isNotBlank()) {
@@ -137,6 +143,11 @@ class TgWsProxyServer {
                         if (!isActive || boundSocket.isClosed) break
                         ProxyLogger.w("Accept error: ${e.message}")
                         delay(200)
+                        continue
+                    }
+                    if (clientJobs.size >= MAX_CONCURRENT_CLIENTS) {
+                        ProxyLogger.w("Too many concurrent clients (${clientJobs.size}); rejecting connection")
+                        runCatching { client.close() }
                         continue
                     }
                     lateinit var cJob: Job
@@ -345,6 +356,10 @@ class TgWsProxyServer {
             }
             val tlsHeader = byteArrayOf(firstByte.toByte()) + hdrRest
             val recordLen = ((tlsHeader[3].toInt() and 0xFF) shl 8) or (tlsHeader[4].toInt() and 0xFF)
+            if (recordLen !in 1..FakeTls.TLS_APPDATA_MAX) {
+                ProxyLogger.d("[$label] invalid TLS record length $recordLen")
+                return null
+            }
             val recordBody = ByteArray(recordLen)
             try {
                 input.readFully(recordBody)

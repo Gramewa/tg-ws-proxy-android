@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,7 +30,6 @@ import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -65,6 +65,7 @@ import io.github.tgwsproxy.android.proxy.DcConnectivityStatus
 import io.github.tgwsproxy.android.proxy.DcParseResult
 import io.github.tgwsproxy.android.proxy.coerceDomainList
 import io.github.tgwsproxy.android.proxy.generateSecretHex
+import io.github.tgwsproxy.android.proxy.isValidDomain
 import io.github.tgwsproxy.android.proxy.isValidIpv4
 import io.github.tgwsproxy.android.proxy.isValidSecretHex
 import io.github.tgwsproxy.android.proxy.parseDcIpRules
@@ -134,12 +135,16 @@ fun SettingsScreen(strings: AppStrings) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (validationError != null) {
-            ElevatedCard(shape = RoundedCornerShape(12.dp)) {
+            GlassCard(
+                modifier = Modifier.fillMaxWidth(),
+                accentColor = MaterialTheme.colorScheme.error,
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(12.dp),
+            ) {
                 Text(
                     text = validationError.orEmpty(),
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(12.dp),
                 )
             }
         }
@@ -178,6 +183,14 @@ fun SettingsScreen(strings: AppStrings) {
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f),
+                )
+            }
+
+            if (draft.host.trim() == "0.0.0.0") {
+                Text(
+                    text = strings.warnBindAllInterfaces,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
                 )
             }
 
@@ -568,6 +581,7 @@ fun SettingsScreen(strings: AppStrings) {
             ) {
                 for (opt in AvailablePalettes) {
                     val paletteTitle = when (opt.id) {
+                        "obsidian" -> strings.paletteObsidian
                         "emerald" -> strings.paletteEmerald
                         "amethyst" -> strings.paletteAmethyst
                         "sunset" -> strings.paletteSunset
@@ -681,20 +695,18 @@ private fun SectionCard(
     title: String,
     content: @Composable () -> Unit,
 ) {
-    ElevatedCard(
+    GlassCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(22.dp),
+        contentPadding = PaddingValues(16.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
-            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f))
             content()
         }
     }
@@ -750,6 +762,14 @@ private fun validateDraft(
     val port = portText.trim().toIntOrNull()
     if (port == null || port !in 1..65535) return strings.errInvalidPort
     if (!isValidSecretHex(draft.secret.trim())) return strings.errInvalidSecret
+    val ftls = draft.fakeTlsDomain.trim().lowercase()
+    if (ftls.isNotEmpty() && !isValidDomain(ftls)) return strings.errInvalidFakeTlsDomain
+    if (draft.cfproxyCustomDomainsEnabled) {
+        val custom = coerceDomainList(draft.cfproxyCustomDomains)
+        if (custom.any { !isValidDomain(it.lowercase()) }) return strings.errInvalidCfDomains
+    }
+    val workers = coerceDomainList(draft.cfworkerDomains)
+    if (workers.any { !isValidDomain(it.lowercase()) }) return strings.errInvalidCfDomains
     when (val res = parseDcIpRules(draft.dcIpRules)) {
         is DcParseResult.Error -> return when (res.kind) {
             DcParseResult.Error.Kind.FORMAT -> "${strings.errDcFormat}${res.entry}"

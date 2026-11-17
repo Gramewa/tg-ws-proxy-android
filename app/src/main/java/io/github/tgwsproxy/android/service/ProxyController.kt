@@ -100,6 +100,10 @@ object ProxyController {
         stopInternal()
     }
 
+    fun stopAsync() {
+        scope.launch { stopProxy() }
+    }
+
     suspend fun restartProxy(): Result<Unit> = opMutex.withLock {
         _isTransitioning.value = true
         _lastError.value = null
@@ -174,7 +178,7 @@ object ProxyController {
     }
 
     fun cyclePaletteAsync() {
-        val order = listOf("ocean", "emerald", "amethyst", "sunset")
+        val order = listOf("obsidian", "ocean", "emerald", "amethyst", "sunset")
         scope.launch {
             updateSettings(restartIfRunning = false) { cur ->
                 val idx = order.indexOf(cur.colorPalette)

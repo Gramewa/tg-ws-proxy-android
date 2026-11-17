@@ -21,7 +21,7 @@ class BootReceiver : BroadcastReceiver() {
             try {
                 val settings = SettingsRepository(appContext).ensureInitialized()
                 if (settings.autoStartOnBoot) {
-                    ProxyForegroundService.start(appContext)
+                    runCatching { ProxyForegroundService.start(appContext) }
                 }
             } finally {
                 pendingResult.finish()

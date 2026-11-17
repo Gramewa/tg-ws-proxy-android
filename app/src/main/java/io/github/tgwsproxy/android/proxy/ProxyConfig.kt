@@ -7,8 +7,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.DatagramSocket
-import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -50,6 +50,7 @@ private const val GITHUB_RAW_HOST = "raw.githubusercontent.com"
 private const val GITHUB_RAW_PINNED_IP = "185.199.109.133"
 private const val CFPROXY_MIN_VALID_DOMAINS = 3
 private const val CFPROXY_REFRESH_INTERVAL_MS = 3_600_000L
+private const val MAX_DOMAIN_LIST_BYTES = 64 * 1024
 
 const val WS_PATH = "/apiws"
 const val WS_PATH_TEST = "/apiws_test"
@@ -348,7 +349,11 @@ class CfDomainRefresher(
                 it.startsWith("transfer-encoding:", ignoreCase = true) &&
                     it.contains("chunked", ignoreCase = true)
             }
-            val bodyBytes = if (isChunked) readChunkedBody(input) else input.readBytes()
+            val bodyBytes = if (isChunked) {
+                readChunkedBody(input, MAX_DOMAIN_LIST_BYTES)
+            } else {
+                readBoundedBytes(input, MAX_DOMAIN_LIST_BYTES)
+            }
             bodyBytes.toString(Charsets.UTF_8)
         } catch (_: Exception) {
             null
@@ -358,14 +363,26 @@ class CfDomainRefresher(
         }
     }
 
-    private fun readChunkedBody(input: BufferedInputStream): ByteArray {
+    private fun readBoundedBytes(input: InputStream, limit: Int): ByteArray {
         val out = ByteArrayOutputStream()
-        while (true) {
+        val buf = ByteArray(4096)
+        while (out.size() < limit) {
+            val maxRead = minOf(buf.size, limit - out.size())
+            val r = input.read(buf, 0, maxRead)
+            if (r <= 0) break
+            out.write(buf, 0, r)
+        }
+        return out.toByteArray()
+    }
+
+    private fun readChunkedBody(input: BufferedInputStream, limit: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        while (out.size() < limit) {
             val sizeLine = readAsciiLine(input) ?: break
             val semi = sizeLine.indexOf(';')
             val clean = (if (semi >= 0) sizeLine.substring(0, semi) else sizeLine).trim()
             val size = clean.toIntOrNull(16) ?: break
-            if (size == 0) break
+            if (size <= 0 || size > limit || out.size() + size > limit) break
             val buf = ByteArray(size)
             var off = 0
             while (off < size) {
@@ -381,7 +398,7 @@ class CfDomainRefresher(
 
     private fun readAsciiLine(input: BufferedInputStream): String? {
         val line = ByteArrayOutputStream()
-        while (true) {
+        while (line.size() < 256) {
             val b = input.read()
             if (b == -1) return if (line.size() == 0) null else line.toString(Charsets.US_ASCII.name())
             if (b == '\n'.code) break
@@ -391,15 +408,19 @@ class CfDomainRefresher(
     }
 
     private fun tryFetchViaStandardHttps(fullUrl: String): String? {
-        var conn: HttpURLConnection? = null
+        var conn: HttpsURLConnection? = null
         return try {
-            conn = (URL(fullUrl).openConnection() as HttpURLConnection).apply {
+            val url = URL(fullUrl)
+            if (!url.protocol.equals("https", ignoreCase = true)) return null
+            conn = (url.openConnection() as? HttpsURLConnection)?.apply {
                 connectTimeout = 10_000
                 readTimeout = 10_000
+                instanceFollowRedirects = false
+                hostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier()
                 setRequestProperty("User-Agent", "tg-ws-proxy")
-            }
+            } ?: return null
             if (conn.responseCode !in 200..299) return null
-            conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            readBoundedBytes(conn.inputStream, MAX_DOMAIN_LIST_BYTES).toString(Charsets.UTF_8)
         } catch (exc: Exception) {
             ProxyLogger.w("Failed to fetch CF proxy domain list: ${exc.javaClass.simpleName}: ${exc.message}")
             null

@@ -2,10 +2,13 @@ package io.github.tgwsproxy.android.ui
 
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.PersistableBundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
@@ -23,8 +26,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -65,10 +70,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -95,6 +97,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -109,6 +112,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.tgwsproxy.android.BuildConfig
 import io.github.tgwsproxy.android.data.AppSettings
+import io.github.tgwsproxy.android.proxy.ProxyConfig
 import io.github.tgwsproxy.android.proxy.StatsSnapshot
 import io.github.tgwsproxy.android.proxy.buildTelegramProxyLink
 import io.github.tgwsproxy.android.proxy.humanBytes
@@ -118,6 +122,10 @@ import io.github.tgwsproxy.android.update.AppUpdater
 import io.github.tgwsproxy.android.update.ReleaseInfo
 import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 
 @Composable
 fun ConnectionScreen(strings: AppStrings) {
@@ -164,29 +172,17 @@ fun ConnectionScreen(strings: AppStrings) {
         try {
             context.startActivity(intent)
         } catch (_: ActivityNotFoundException) {
-            copyToClipboard(context, "TG Proxy Link", proxyLink)
+            copyToClipboard(context, "TG Proxy Link", proxyLink, isSensitive = true)
             Toast.makeText(context, strings.toastTelegramMissingCopied, Toast.LENGTH_LONG).show()
         }
     }
 
     val copyLink = {
-        copyToClipboard(context, "TG Proxy Link", proxyLink)
+        copyToClipboard(context, "TG Proxy Link", proxyLink, isSensitive = true)
         Toast.makeText(context, strings.toastLinkCopied, Toast.LENGTH_SHORT).show()
     }
 
-    val bgBrush = Brush.verticalGradient(
-        colors = listOf(
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
-            MaterialTheme.colorScheme.background,
-            MaterialTheme.colorScheme.background,
-        ),
-    )
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(bgBrush),
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
         AnimatedContent(
             targetState = settings.simpleMode,
             transitionSpec = {
@@ -198,8 +194,10 @@ fun ConnectionScreen(strings: AppStrings) {
                 SimpleConnectionView(
                     strings = strings,
                     settings = settings,
+                    effectiveConfig = effectiveConfig,
                     isRunning = isRunning,
                     isTransitioning = isTransitioning,
+                    uptimeSec = uptimeSec,
                     lastError = lastError,
                     ignoringBattery = ignoringBattery,
                     availableRelease = availableRelease,
@@ -211,8 +209,7 @@ fun ConnectionScreen(strings: AppStrings) {
                 ExpertConnectionView(
                     strings = strings,
                     settings = settings,
-                    host = effectiveConfig.host,
-                    port = effectiveConfig.port,
+                    effectiveConfig = effectiveConfig,
                     isRunning = isRunning,
                     isTransitioning = isTransitioning,
                     lastError = lastError,
@@ -234,8 +231,10 @@ fun ConnectionScreen(strings: AppStrings) {
 private fun SimpleConnectionView(
     strings: AppStrings,
     settings: AppSettings,
+    effectiveConfig: ProxyConfig,
     isRunning: Boolean,
     isTransitioning: Boolean,
+    uptimeSec: Long,
     lastError: String?,
     ignoringBattery: Boolean,
     availableRelease: ReleaseInfo?,
@@ -246,12 +245,13 @@ private fun SimpleConnectionView(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val isCheckingUpdate by AppUpdater.isChecking.collectAsStateWithLifecycle()
+    val cs = MaterialTheme.colorScheme
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 14.dp),
+            .padding(horizontal = 20.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -267,19 +267,62 @@ private fun SimpleConnectionView(
             ErrorBanner(lastError = lastError, closeDesc = strings.btnClose)
         }
 
-        Spacer(Modifier.height(4.dp))
+        // Compact live connection status capsule
+        val statusAccent = when {
+            isTransitioning -> cs.secondary
+            isRunning -> cs.tertiary
+            else -> cs.outline
+        }
+        val capsuleText = when {
+            isTransitioning -> strings.simpleHeroWorkingTitle
+            isRunning -> {
+                val routeTag = if (settings.disableSecure) ":80 HTTP" else ":${effectiveConfig.port}"
+                "${strings.simpleHeroRunningTitle} • $routeTag • ${formatUptime(uptimeSec)}"
+            }
+            else -> strings.simpleHeroStoppedTitle
+        }
+        Surface(
+            shape = RoundedCornerShape(999.dp),
+            color = statusAccent.copy(alpha = 0.14f),
+            border = BorderStroke(1.dp, statusAccent.copy(alpha = 0.36f)),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(statusAccent),
+                )
+                Text(
+                    text = capsuleText,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontFamily = if (isRunning) FontFamily.Monospace else FontFamily.Default,
+                    fontWeight = FontWeight.SemiBold,
+                    color = cs.onSurface,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
 
-        HeroPowerOrb(
+        // Precision reactor centerpiece
+        HeroReactorButton(
             isRunning = isRunning,
             isTransitioning = isTransitioning,
-            stageSize = 196.dp,
-            orbSize = 132.dp,
+            stageSize = 212.dp,
+            orbSize = 142.dp,
             onClick = onToggleProxy,
         )
 
+        // Clean title + subtitle + explicit pill CTA
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(horizontal = 8.dp),
         ) {
             Text(
@@ -295,12 +338,37 @@ private fun SimpleConnectionView(
             Text(
                 text = if (isRunning) strings.simpleHeroRunningSub else strings.simpleHeroStoppedSub,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = cs.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+            Spacer(Modifier.height(2.dp))
+            FilledTonalButton(
+                onClick = onToggleProxy,
+                enabled = !isTransitioning,
+                shape = RoundedCornerShape(999.dp),
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PowerSettingsNew,
+                    contentDescription = null,
+                    modifier = Modifier.size(17.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = when {
+                        isTransitioning -> strings.simpleHeroWorkingTitle
+                        isRunning -> strings.simpleTapToDisconnect
+                        else -> strings.simpleTapToConnect
+                    },
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
-        // Primary Telegram connect action + subtle copy button
+        // Primary Telegram connect action + glass copy button
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -312,17 +380,14 @@ private fun SimpleConnectionView(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val gradient = Brush.horizontalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.primary,
-                        MaterialTheme.colorScheme.secondary,
-                    ),
+                    colors = listOf(cs.primary, cs.secondary),
                 )
                 Button(
                     onClick = onOpenTelegram,
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 54.dp),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(18.dp),
                     contentPadding = PaddingValues(0.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
                 ) {
@@ -330,24 +395,24 @@ private fun SimpleConnectionView(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 54.dp)
-                            .background(gradient, RoundedCornerShape(16.dp)),
+                            .background(gradient, RoundedCornerShape(18.dp)),
                         contentAlignment = Alignment.Center,
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 14.dp),
+                            modifier = Modifier.padding(horizontal = 16.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.Center,
                         ) {
                             Icon(
                                 Icons.AutoMirrored.Filled.Send,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimary,
+                                tint = cs.onPrimary,
                                 modifier = Modifier.size(19.dp),
                             )
                             Spacer(Modifier.width(10.dp))
                             Text(
                                 text = strings.simpleConnectTgBtn,
-                                color = MaterialTheme.colorScheme.onPrimary,
+                                color = cs.onPrimary,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
@@ -358,11 +423,12 @@ private fun SimpleConnectionView(
                     }
                 }
 
-                FilledTonalButton(
+                OutlinedButton(
                     onClick = onCopyLink,
                     modifier = Modifier.size(54.dp),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(18.dp),
                     contentPadding = PaddingValues(0.dp),
+                    border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.28f)),
                 ) {
                     Icon(Icons.Default.ContentCopy, contentDescription = strings.btnCopyLink)
                 }
@@ -371,36 +437,25 @@ private fun SimpleConnectionView(
             Text(
                 text = strings.simpleConnectTgHint,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = cs.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
         }
 
-        // Single non-technical rescue toggle card ("Усиленный обход" -> disableSecure)
-        ElevatedCard(
+        // Single non-technical port 80 toggle card ("Резервный канал")
+        GlassCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.elevatedCardColors(
-                containerColor = if (settings.disableSecure) {
-                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
-                } else {
-                    MaterialTheme.colorScheme.surface
-                },
-            ),
+            accentColor = if (settings.disableSecure) cs.tertiary else null,
+            shape = RoundedCornerShape(22.dp),
+            contentPadding = PaddingValues(16.dp),
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Surface(
-                    color = if (settings.disableSecure) {
-                        MaterialTheme.colorScheme.tertiary
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    },
+                    color = if (settings.disableSecure) cs.tertiary else cs.surfaceVariant,
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.size(44.dp),
                 ) {
@@ -408,11 +463,7 @@ private fun SimpleConnectionView(
                         Icon(
                             imageVector = Icons.Default.Bolt,
                             contentDescription = null,
-                            tint = if (settings.disableSecure) {
-                                MaterialTheme.colorScheme.onTertiary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
+                            tint = if (settings.disableSecure) cs.onTertiary else cs.onSurfaceVariant,
                         )
                     }
                 }
@@ -436,12 +487,12 @@ private fun SimpleConnectionView(
                         )
                         if (settings.disableSecure) {
                             Surface(
-                                color = MaterialTheme.colorScheme.tertiary,
+                                color = cs.tertiary,
                                 shape = RoundedCornerShape(999.dp),
                             ) {
                                 Text(
                                     text = strings.simpleBoostActiveBadge,
-                                    color = MaterialTheme.colorScheme.onTertiary,
+                                    color = cs.onTertiary,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
@@ -454,7 +505,7 @@ private fun SimpleConnectionView(
                     Text(
                         text = strings.simpleBoostSub,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = cs.onSurfaceVariant,
                     )
                 }
 
@@ -473,16 +524,14 @@ private fun SimpleConnectionView(
             )
         }
 
-        // Compact quick controls bar (Language, Theme, Palette, Check Update)
-        Surface(
+        // Glassmorphic quick-controls bar
+        GlassCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            shape = RoundedCornerShape(20.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
         ) {
             FlowRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -507,10 +556,11 @@ private fun SimpleConnectionView(
                 )
 
                 val palettePreview = AvailablePalettes.firstOrNull { it.id == settings.colorPalette }?.previewColor
-                    ?: MaterialTheme.colorScheme.primary
+                    ?: cs.primary
                 Surface(
                     shape = RoundedCornerShape(999.dp),
-                    color = MaterialTheme.colorScheme.surface,
+                    color = cs.surfaceVariant.copy(alpha = 0.7f),
+                    border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.2f)),
                     modifier = Modifier.clickable { ProxyController.cyclePaletteAsync() },
                 ) {
                     Row(
@@ -522,7 +572,7 @@ private fun SimpleConnectionView(
                             Icons.Default.Palette,
                             contentDescription = strings.labelPalette,
                             modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = cs.primary,
                         )
                         Box(
                             modifier = Modifier
@@ -536,10 +586,18 @@ private fun SimpleConnectionView(
                 Surface(
                     shape = RoundedCornerShape(999.dp),
                     color = if (availableRelease != null) {
-                        MaterialTheme.colorScheme.tertiaryContainer
+                        cs.tertiaryContainer
                     } else {
-                        MaterialTheme.colorScheme.surface
+                        cs.surfaceVariant.copy(alpha = 0.7f)
                     },
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = if (availableRelease != null) {
+                            cs.tertiary.copy(alpha = 0.45f)
+                        } else {
+                            cs.outline.copy(alpha = 0.2f)
+                        },
+                    ),
                     modifier = Modifier.clickable(enabled = !isCheckingUpdate) {
                         if (availableRelease != null) {
                             AppUpdater.openDialog()
@@ -573,11 +631,7 @@ private fun SimpleConnectionView(
                                 Icons.Default.SystemUpdate,
                                 contentDescription = strings.simpleCheckUpdateLabel,
                                 modifier = Modifier.size(15.dp),
-                                tint = if (availableRelease != null) {
-                                    MaterialTheme.colorScheme.onTertiaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
+                                tint = if (availableRelease != null) cs.onTertiaryContainer else cs.onSurfaceVariant,
                             )
                         }
                         Text(
@@ -591,11 +645,7 @@ private fun SimpleConnectionView(
                             maxLines = 1,
                             softWrap = false,
                             overflow = TextOverflow.Ellipsis,
-                            color = if (availableRelease != null) {
-                                MaterialTheme.colorScheme.onTertiaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
+                            color = if (availableRelease != null) cs.onTertiaryContainer else cs.onSurface,
                         )
                     }
                 }
@@ -609,8 +659,7 @@ private fun SimpleConnectionView(
 private fun ExpertConnectionView(
     strings: AppStrings,
     settings: AppSettings,
-    host: String,
-    port: Int,
+    effectiveConfig: ProxyConfig,
     isRunning: Boolean,
     isTransitioning: Boolean,
     lastError: String?,
@@ -622,6 +671,10 @@ private fun ExpertConnectionView(
     onOpenTelegram: () -> Unit,
     onCopyLink: () -> Unit,
 ) {
+    val cs = MaterialTheme.colorScheme
+    val host = effectiveConfig.host
+    val port = effectiveConfig.port
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -641,24 +694,23 @@ private fun ExpertConnectionView(
             ErrorBanner(lastError = lastError, closeDesc = strings.btnClose)
         }
 
-        // Expressive Status Hero Card
-        ElevatedCard(
+        // Expressive Telemetry Glass Hero Card
+        GlassCard(
             modifier = Modifier.fillMaxWidth(),
+            accentColor = if (isRunning) cs.tertiary else null,
             shape = RoundedCornerShape(24.dp),
+            contentPadding = PaddingValues(18.dp),
         ) {
-            Column(
-                modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    HeroPowerOrb(
+                    HeroReactorButton(
                         isRunning = isRunning,
                         isTransitioning = isTransitioning,
-                        stageSize = 92.dp,
+                        stageSize = 94.dp,
                         orbSize = 68.dp,
                         onClick = onToggleProxy,
                     )
@@ -667,54 +719,49 @@ private fun ExpertConnectionView(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(
-                                text = when {
-                                    isTransitioning -> strings.statusStarting
-                                    isRunning -> strings.statusRunning
-                                    else -> strings.statusStopped
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
+                        Text(
+                            text = when {
+                                isTransitioning -> strings.statusStarting
+                                isRunning -> strings.statusRunning
+                                else -> strings.statusStopped
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
 
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                shape = RoundedCornerShape(8.dp),
-                            ) {
-                                Text(
-                                    text = "$host:$port",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            TelemetryBadge(
+                                text = "$host:$port",
+                                bg = cs.surfaceVariant.copy(alpha = 0.85f),
+                                fg = cs.onSurface,
+                                mono = true,
+                            )
+                            if (settings.disableSecure) {
+                                TelemetryBadge(
+                                    text = strings.disableTlsBadge,
+                                    bg = cs.tertiaryContainer,
+                                    fg = cs.onTertiaryContainer,
+                                    bold = true,
                                 )
                             }
-                            if (settings.disableSecure) {
-                                Surface(
-                                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                                    shape = RoundedCornerShape(8.dp),
-                                ) {
-                                    Text(
-                                        text = strings.disableTlsBadge,
-                                        color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                    )
-                                }
+                            if (effectiveConfig.fakeTlsDomain.isNotBlank()) {
+                                TelemetryBadge(
+                                    text = "FakeTLS",
+                                    bg = cs.secondaryContainer,
+                                    fg = cs.onSecondaryContainer,
+                                    bold = true,
+                                )
+                            }
+                            if (effectiveConfig.h2Enabled) {
+                                TelemetryBadge(
+                                    text = "HTTP/2",
+                                    bg = cs.primaryContainer,
+                                    fg = cs.onPrimaryContainer,
+                                    bold = true,
+                                )
                             }
                         }
 
@@ -723,7 +770,7 @@ private fun ExpertConnectionView(
                                 text = "${strings.uptimeLabel}: ${formatUptime(uptimeSec)}",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = cs.onSurfaceVariant,
                                 maxLines = 1,
                                 softWrap = false,
                                 overflow = TextOverflow.Ellipsis,
@@ -732,7 +779,14 @@ private fun ExpertConnectionView(
                     }
                 }
 
-                // Gradient Traffic Cards
+                // Live Route Topology Strip
+                RouteTopologyStrip(
+                    title = strings.routePipelineTitle,
+                    stats = stats,
+                    config = effectiveConfig,
+                )
+
+                // Traffic Cards
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -741,14 +795,14 @@ private fun ExpertConnectionView(
                         label = strings.trafficUp,
                         value = humanBytes(stats.bytesUp),
                         icon = Icons.Default.ArrowUpward,
-                        accent = MaterialTheme.colorScheme.primary,
+                        accent = cs.primary,
                         modifier = Modifier.weight(1f),
                     )
                     TrafficGradientCard(
                         label = strings.trafficDown,
                         value = humanBytes(stats.bytesDown),
                         icon = Icons.Default.ArrowDownward,
-                        accent = MaterialTheme.colorScheme.tertiary,
+                        accent = cs.tertiary,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -782,8 +836,8 @@ private fun ExpertConnectionView(
             shape = RoundedCornerShape(16.dp),
             colors = if (isRunning) {
                 ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
+                    containerColor = cs.error,
+                    contentColor = cs.onError,
                 )
             } else {
                 ButtonDefaults.buttonColors()
@@ -793,7 +847,7 @@ private fun ExpertConnectionView(
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onPrimary,
+                    color = cs.onPrimary,
                 )
             } else {
                 Icon(Icons.Default.PowerSettingsNew, contentDescription = null)
@@ -840,20 +894,19 @@ private fun ExpertConnectionView(
                 modifier = Modifier.size(48.dp),
                 shape = RoundedCornerShape(14.dp),
                 contentPadding = PaddingValues(0.dp),
+                border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.3f)),
             ) {
                 Icon(Icons.Default.ContentCopy, contentDescription = strings.btnCopyLink, modifier = Modifier.size(20.dp))
             }
         }
 
-        // Technical Quick Toggles card (Disable TLS + CF Proxy + H2)
-        ElevatedCard(
+        // Technical Quick Toggles card
+        GlassCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(22.dp),
+            contentPadding = PaddingValues(16.dp),
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     text = strings.quickSettingsTitle,
                     style = MaterialTheme.typography.titleMedium,
@@ -868,7 +921,7 @@ private fun ExpertConnectionView(
                     onCheckedChange = { ProxyController.setDisableSecureAsync(it) },
                 )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                HorizontalDivider(color = cs.outline.copy(alpha = 0.16f))
 
                 QuickSwitchRow(
                     title = strings.cfProxyTitle,
@@ -877,7 +930,7 @@ private fun ExpertConnectionView(
                     onCheckedChange = { ProxyController.setCfProxyEnabledAsync(it) },
                 )
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                HorizontalDivider(color = cs.outline.copy(alpha = 0.16f))
 
                 val h2Available = settings.cfproxyEnabled && !settings.disableSecure && !settings.forceTestDc
                 QuickSwitchRow(
@@ -901,7 +954,7 @@ private fun ExpertConnectionView(
 }
 
 @Composable
-private fun HeroPowerOrb(
+private fun HeroReactorButton(
     isRunning: Boolean,
     isTransitioning: Boolean,
     stageSize: Dp,
@@ -909,29 +962,30 @@ private fun HeroPowerOrb(
     onClick: () -> Unit,
 ) {
     val palette = rememberHeroPalette(isRunning = isRunning, isTransitioning = isTransitioning)
+    val cs = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.93f else 1f,
+        targetValue = if (pressed) 0.92f else 1f,
         animationSpec = spring(stiffness = Spring.StiffnessMedium),
         label = "orbScale",
     )
 
-    val infinite = rememberInfiniteTransition(label = "orbPulse")
-    val pulse1 by infinite.animateFloat(
+    val infinite = rememberInfiniteTransition(label = "reactorPulse")
+    val pulse by infinite.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing),
+            animation = tween(2200, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
-        label = "pulse1",
+        label = "pulse",
     )
     val sweepAngle by infinite.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
-            animation = tween(2400, easing = LinearEasing),
+            animation = tween(2600, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
         label = "sweep",
@@ -963,49 +1017,90 @@ private fun HeroPowerOrb(
                 center = center,
             )
 
-            if (isRunning || isTransitioning) {
-                val r1 = coreRadius + (maxRadius - coreRadius) * pulse1
-                drawCircle(
-                    color = ringColor.copy(alpha = (1f - pulse1) * 0.45f),
-                    radius = r1,
-                    center = center,
-                    style = Stroke(width = 2.5.dp.toPx()),
+            // 36 radial precision instrument ticks around the dial
+            val tickOuter = maxRadius - 2.dp.toPx()
+            val tickCount = 36
+            for (i in 0 until tickCount) {
+                val deg = i * (360f / tickCount)
+                val rad = deg * (PI / 180.0)
+                val isMajor = i % 3 == 0
+                val inner = tickOuter - (if (isMajor) 7.dp.toPx() else 4.dp.toPx())
+                val start = Offset(
+                    x = center.x + (inner * cos(rad)).toFloat(),
+                    y = center.y + (inner * sin(rad)).toFloat(),
                 )
+                val end = Offset(
+                    x = center.x + (tickOuter * cos(rad)).toFloat(),
+                    y = center.y + (tickOuter * sin(rad)).toFloat(),
+                )
+                val alpha = if (isRunning || isTransitioning) {
+                    val delta = abs(((deg - sweepAngle + 540f) % 360f) - 180f)
+                    if (delta < 75f) 0.90f - (delta / 75f) * 0.65f else if (isMajor) 0.30f else 0.14f
+                } else {
+                    if (isMajor) 0.24f else 0.11f
+                }
+                drawLine(
+                    color = ringColor.copy(alpha = alpha),
+                    start = start,
+                    end = end,
+                    strokeWidth = if (isMajor) 2.dp.toPx() else 1.2.dp.toPx(),
+                    cap = StrokeCap.Round,
+                )
+            }
 
-                val p2 = (pulse1 + 0.5f) % 1f
-                val r2 = coreRadius + (maxRadius - coreRadius) * p2
+            if (isRunning || isTransitioning) {
+                val pulseRadius = coreRadius + (tickOuter - 10.dp.toPx() - coreRadius) * pulse
                 drawCircle(
-                    color = ringColor.copy(alpha = (1f - p2) * 0.35f),
-                    radius = r2,
+                    color = ringColor.copy(alpha = (1f - pulse) * 0.42f),
+                    radius = pulseRadius,
                     center = center,
                     style = Stroke(width = 2.dp.toPx()),
                 )
 
                 val arcRadius = coreRadius + 6.dp.toPx()
                 drawArc(
-                    color = ringColor.copy(alpha = 0.85f),
+                    color = ringColor.copy(alpha = 0.90f),
                     startAngle = sweepAngle,
-                    sweepAngle = 95f,
+                    sweepAngle = 110f,
                     useCenter = false,
                     topLeft = Offset(center.x - arcRadius, center.y - arcRadius),
                     size = Size(arcRadius * 2f, arcRadius * 2f),
-                    style = Stroke(width = 3.5.dp.toPx(), cap = StrokeCap.Round),
+                    style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round),
                 )
+                val outerArcRadius = coreRadius + 12.dp.toPx()
+                if (outerArcRadius < tickOuter - 6.dp.toPx()) {
+                    drawArc(
+                        color = cs.primary.copy(alpha = 0.55f),
+                        startAngle = 360f - sweepAngle * 0.7f,
+                        sweepAngle = 70f,
+                        useCenter = false,
+                        topLeft = Offset(center.x - outerArcRadius, center.y - outerArcRadius),
+                        size = Size(outerArcRadius * 2f, outerArcRadius * 2f),
+                        style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                }
             } else {
                 drawCircle(
-                    color = ringColor.copy(alpha = 0.3f),
+                    color = ringColor.copy(alpha = 0.28f),
                     radius = coreRadius + 6.dp.toPx(),
                     center = center,
-                    style = Stroke(width = 2.dp.toPx()),
+                    style = Stroke(width = 1.5.dp.toPx()),
                 )
             }
         }
 
+        val specularBorder = Brush.linearGradient(
+            colors = listOf(
+                Color.White.copy(alpha = if (isRunning) 0.50f else 0.22f),
+                ringColor.copy(alpha = 0.18f),
+            ),
+        )
         Box(
             modifier = Modifier
                 .size(orbSize)
                 .clip(CircleShape)
                 .background(Brush.linearGradient(colors = listOf(c0, c1)))
+                .border(1.5.dp, specularBorder, CircleShape)
                 .clickable(
                     interactionSource = interaction,
                     indication = null,
@@ -1016,7 +1111,7 @@ private fun HeroPowerOrb(
         ) {
             if (isTransitioning) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(orbSize * 0.36f),
+                    modifier = Modifier.size(orbSize * 0.34f),
                     color = Color.White,
                     strokeWidth = 3.dp,
                 )
@@ -1024,10 +1119,136 @@ private fun HeroPowerOrb(
                 Icon(
                     imageVector = if (isRunning) Icons.Default.Shield else Icons.Default.PowerSettingsNew,
                     contentDescription = null,
-                    tint = if (isRunning) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(orbSize * 0.42f),
+                    tint = if (isRunning) Color.White else cs.primary,
+                    modifier = Modifier.size(orbSize * 0.40f),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun TelemetryBadge(
+    text: String,
+    bg: Color,
+    fg: Color,
+    mono: Boolean = false,
+    bold: Boolean = false,
+) {
+    Surface(
+        color = bg,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Text(
+            text = text,
+            color = fg,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RouteTopologyStrip(
+    title: String,
+    stats: StatsSnapshot,
+    config: ProxyConfig,
+) {
+    val cs = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = cs.surfaceVariant.copy(alpha = 0.42f),
+        border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.14f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelSmall,
+                color = cs.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                RouteNodePill(
+                    label = "WS Direct",
+                    active = stats.connectionsWs > 0 || config.dcRedirects.isNotEmpty(),
+                    lit = stats.connectionsWs > 0,
+                )
+                RouteNodePill(
+                    label = if (config.disableSecure) "CF :80" else "CF TLS",
+                    active = config.fallbackCfproxy,
+                    lit = stats.connectionsCfproxy > 0,
+                )
+                RouteNodePill(
+                    label = "HTTP/2",
+                    active = config.h2Enabled,
+                    lit = stats.connectionsH2 > 0,
+                )
+                if (config.cfproxyWorkerDomains.isNotEmpty()) {
+                    RouteNodePill(
+                        label = "Worker",
+                        active = true,
+                        lit = stats.cfPoolHits > 0,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RouteNodePill(
+    label: String,
+    active: Boolean,
+    lit: Boolean,
+) {
+    val cs = MaterialTheme.colorScheme
+    val dotColor = when {
+        lit -> cs.tertiary
+        active -> cs.primary
+        else -> cs.outline.copy(alpha = 0.5f)
+    }
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = if (lit) cs.tertiary.copy(alpha = 0.14f) else cs.surface.copy(alpha = 0.55f),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (lit) cs.tertiary.copy(alpha = 0.45f) else cs.outline.copy(alpha = 0.18f),
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(dotColor),
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (active) cs.onSurface else cs.onSurfaceVariant,
+                fontWeight = if (lit) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                softWrap = false,
+            )
         }
     }
 }
@@ -1044,6 +1265,7 @@ private fun TrafficGradientCard(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
         color = accent.copy(alpha = 0.11f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.25f)),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
@@ -1088,12 +1310,14 @@ private fun UpdateAvailableBanner(
     strings: AppStrings,
     onClick: () -> Unit,
 ) {
+    val cs = MaterialTheme.colorScheme
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.tertiaryContainer,
+        color = cs.tertiaryContainer,
+        border = BorderStroke(1.dp, cs.tertiary.copy(alpha = 0.4f)),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
@@ -1108,25 +1332,25 @@ private fun UpdateAvailableBanner(
                 Icon(
                     Icons.Default.SystemUpdate,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                    tint = cs.onTertiaryContainer,
                 )
                 Text(
                     text = "${strings.updateDialogTitle}: v${release.version}",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    color = cs.onTertiaryContainer,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
             Spacer(Modifier.width(8.dp))
             Surface(
-                color = MaterialTheme.colorScheme.tertiary,
+                color = cs.tertiary,
                 shape = RoundedCornerShape(999.dp),
             ) {
                 Text(
                     text = strings.simpleUpdateAvailableChip,
-                    color = MaterialTheme.colorScheme.onTertiary,
+                    color = cs.onTertiary,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -1140,11 +1364,11 @@ private fun UpdateAvailableBanner(
 
 @Composable
 private fun ErrorBanner(lastError: String, closeDesc: String) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-        ),
+    val cs = MaterialTheme.colorScheme
+    Surface(
+        color = cs.errorContainer,
         shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, cs.error.copy(alpha = 0.45f)),
     ) {
         Row(
             modifier = Modifier
@@ -1155,12 +1379,12 @@ private fun ErrorBanner(lastError: String, closeDesc: String) {
             Icon(
                 imageVector = Icons.Default.Error,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onErrorContainer,
+                tint = cs.onErrorContainer,
             )
             Spacer(Modifier.width(10.dp))
             Text(
                 text = lastError,
-                color = MaterialTheme.colorScheme.onErrorContainer,
+                color = cs.onErrorContainer,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f),
             )
@@ -1168,7 +1392,7 @@ private fun ErrorBanner(lastError: String, closeDesc: String) {
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = closeDesc,
-                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    tint = cs.onErrorContainer,
                 )
             }
         }
@@ -1182,34 +1406,32 @@ private fun BatteryOptimizationCard(
     actionLabel: String,
 ) {
     val context = LocalContext.current
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-        ),
-        shape = RoundedCornerShape(18.dp),
+    val cs = MaterialTheme.colorScheme
+    GlassCard(
+        modifier = Modifier.fillMaxWidth(),
+        accentColor = cs.secondary,
+        shape = RoundedCornerShape(20.dp),
+        contentPadding = PaddingValues(16.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = Icons.Default.BatteryChargingFull,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    tint = cs.secondary,
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    color = cs.onSurface,
                 )
             }
             Text(
                 text = body,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                color = cs.onSurfaceVariant,
             )
             OutlinedButton(
                 onClick = {
@@ -1234,9 +1456,11 @@ private fun BatteryOptimizationCard(
 
 @Composable
 private fun QuickFooterPill(label: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
     Surface(
         shape = RoundedCornerShape(999.dp),
-        color = MaterialTheme.colorScheme.surface,
+        color = cs.surfaceVariant.copy(alpha = 0.7f),
+        border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.2f)),
         modifier = Modifier.clickable(onClick = onClick),
     ) {
         Text(
@@ -1253,9 +1477,11 @@ private fun QuickFooterPill(label: String, onClick: () -> Unit) {
 
 @Composable
 private fun QuickFooterIconPill(icon: ImageVector, label: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
     Surface(
         shape = RoundedCornerShape(999.dp),
-        color = MaterialTheme.colorScheme.surface,
+        color = cs.surfaceVariant.copy(alpha = 0.7f),
+        border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.2f)),
         modifier = Modifier.clickable(onClick = onClick),
     ) {
         Row(
@@ -1343,9 +1569,12 @@ private fun QuickSwitchRow(
 
 @Composable
 private fun MiniStatChip(label: String, value: String, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    val isDark = cs.background.luminance() < 0.5f
     Surface(
         modifier = modifier,
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = cs.surfaceVariant.copy(alpha = if (isDark) 0.55f else 0.72f),
+        border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.14f)),
         shape = RoundedCornerShape(12.dp),
     ) {
         Column(
@@ -1364,7 +1593,7 @@ private fun MiniStatChip(label: String, value: String, modifier: Modifier = Modi
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = cs.onSurfaceVariant,
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,
@@ -1385,7 +1614,18 @@ private fun isIgnoringBatteryOptimizations(context: Context): Boolean {
     return pm.isIgnoringBatteryOptimizations(context.packageName)
 }
 
-fun copyToClipboard(context: Context, label: String, text: String) {
+fun copyToClipboard(
+    context: Context,
+    label: String,
+    text: String,
+    isSensitive: Boolean = false,
+) {
     val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    cb.setPrimaryClip(ClipData.newPlainText(label, text))
+    val clip = ClipData.newPlainText(label, text)
+    if (isSensitive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        clip.description.extras = PersistableBundle().apply {
+            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+        }
+    }
+    cb.setPrimaryClip(clip)
 }

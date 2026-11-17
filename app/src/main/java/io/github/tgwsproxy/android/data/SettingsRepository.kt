@@ -75,7 +75,7 @@ class SettingsRepository(private val context: Context) {
             autoStartOnBoot = prefs[Keys.AUTO_START_ON_BOOT] ?: false,
             keepWakeLock = prefs[Keys.KEEP_WAKE_LOCK] ?: false,
             themeMode = prefs[Keys.THEME_MODE] ?: "auto",
-            colorPalette = prefs[Keys.COLOR_PALETTE] ?: "ocean",
+            colorPalette = prefs[Keys.COLOR_PALETTE] ?: "obsidian",
             dynamicColors = prefs[Keys.DYNAMIC_COLORS] ?: false,
             language = prefs[Keys.LANGUAGE] ?: defaultLanguage(),
             simpleMode = prefs[Keys.SIMPLE_MODE] ?: true,

@@ -31,12 +31,14 @@ data class LogEntry(
 }
 
 object DomainCensor {
+    private val secretParamPattern = Regex("""(?i)(secret=)[0-9a-f]{16,}""")
     private val domainPattern = Regex(
         """(?<![\w-])(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?![\w-])"""
     )
 
     fun censor(message: String): String {
-        return domainPattern.replace(message) { match ->
+        val withoutSecret = secretParamPattern.replace(message, "$1***")
+        return domainPattern.replace(withoutSecret) { match ->
             val domain = match.value
             val normalized = domain.lowercase().trimEnd('.')
             if (normalized == "telegram.org" ||
@@ -121,10 +123,11 @@ object ProxyLogger {
             buffer.addLast(entry)
             _entries.value = buffer.toList()
         }
+        val verbose = verboseEnabled.get()
         try {
             when (level) {
-                LogLevel.DEBUG -> android.util.Log.d(TAG, censored)
-                LogLevel.INFO -> android.util.Log.i(TAG, censored)
+                LogLevel.DEBUG -> if (verbose) android.util.Log.d(TAG, censored)
+                LogLevel.INFO -> if (verbose) android.util.Log.i(TAG, censored)
                 LogLevel.WARN -> android.util.Log.w(TAG, censored)
                 LogLevel.ERROR -> android.util.Log.e(TAG, censored)
             }

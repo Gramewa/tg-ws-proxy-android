@@ -13,8 +13,8 @@ android {
         minSdk = 26
         targetSdk = 35
         // Upstream Flowseal/tg-ws-proxy v1.11.4+ protocol parity
-        versionCode = 110
-        versionName = "1.1.0"
+        versionCode = 120
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

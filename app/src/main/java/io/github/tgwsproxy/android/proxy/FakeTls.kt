@@ -10,6 +10,7 @@ import java.io.DataInputStream
 import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
@@ -327,6 +328,27 @@ object FakeTls {
         return null
     }
 
+    fun isPublicUnicastAddress(addr: InetAddress): Boolean {
+        return !addr.isAnyLocalAddress &&
+            !addr.isLoopbackAddress &&
+            !addr.isLinkLocalAddress &&
+            !addr.isSiteLocalAddress &&
+            !addr.isMulticastAddress
+    }
+
+    private fun resolveSafePublicAddress(domain: String): InetAddress? {
+        if (!isValidDomain(domain)) return null
+        val addrs = try {
+            InetAddress.getAllByName(domain)
+        } catch (_: Exception) {
+            return null
+        }
+        if (addrs.isEmpty() || addrs.any { !isPublicUnicastAddress(it) }) {
+            return null
+        }
+        return addrs.firstOrNull()
+    }
+
     suspend fun probeAppdataLen(
         domain: String,
         port: Int = 443,
@@ -365,9 +387,14 @@ object FakeTls {
             }
             if (clientHello == null || clientHello.isEmpty()) return@withContext null
 
+            val safeAddr = resolveSafePublicAddress(domain) ?: run {
+                ProxyLogger.w("Fake TLS profile: blocked or unresolvable domain $domain")
+                return@withContext null
+            }
+
             val deadline = System.currentTimeMillis() + timeoutMs
             sock = Socket()
-            sock.connect(InetSocketAddress(domain, port), timeoutMs)
+            sock.connect(InetSocketAddress(safeAddr, port), timeoutMs)
             sock.soTimeout = timeoutMs
             sock.getOutputStream().apply {
                 write(clientHello)
@@ -424,13 +451,23 @@ object FakeTls {
         domain: String,
         label: String,
     ) = withContext(Dispatchers.IO) {
+        val safeAddr = resolveSafePublicAddress(domain)
+        if (safeAddr == null) {
+            ProxyLogger.w("[$label] masking: blocked or unresolvable domain $domain")
+            try { clientSocket.close() } catch (_: Exception) {}
+            return@withContext
+        }
         val upstream = Socket()
         try {
-            upstream.connect(InetSocketAddress(domain, 443), 10_000)
+            upstream.connect(InetSocketAddress(safeAddr, 443), 10_000)
+            upstream.soTimeout = 30_000
+            clientSocket.soTimeout = 30_000
         } catch (e: CancellationException) {
             throw e
         } catch (exc: Exception) {
             ProxyLogger.w("[$label] masking: cannot connect to $domain:443: ${exc.javaClass.simpleName}: ${exc.message}")
+            try { upstream.close() } catch (_: Exception) {}
+            try { clientSocket.close() } catch (_: Exception) {}
             return@withContext
         }
 
@@ -572,6 +609,9 @@ class FakeTlsStream(
             val recLen = ((hdr[3].toInt() and 0xFF) shl 8) or (hdr[4].toInt() and 0xFF)
 
             if (rtype == FakeTls.TLS_RECORD_CCS) {
+                if (recLen > 64) {
+                    return ByteArray(0)
+                }
                 if (recLen > 0) {
                     val skip = ByteArray(recLen)
                     rawInput.readFully(skip)
@@ -579,7 +619,7 @@ class FakeTlsStream(
                 continue
             }
 
-            if (rtype != FakeTls.TLS_RECORD_APPDATA) {
+            if (rtype != FakeTls.TLS_RECORD_APPDATA || recLen > FakeTls.TLS_APPDATA_MAX + 2048) {
                 return ByteArray(0)
             }
 

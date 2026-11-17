@@ -17,6 +17,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.github.tgwsproxy.android.MainActivity
 import io.github.tgwsproxy.android.R
+import io.github.tgwsproxy.android.proxy.ProxyLogger
 import io.github.tgwsproxy.android.proxy.buildTelegramProxyLink
 import io.github.tgwsproxy.android.proxy.humanBytes
 import kotlinx.coroutines.CoroutineScope
@@ -40,14 +41,19 @@ class ProxyForegroundService : Service() {
             val intent = Intent(context, ProxyForegroundService::class.java).apply {
                 action = ACTION_START
             }
-            ContextCompat.startForegroundService(context, intent)
+            runCatching {
+                ContextCompat.startForegroundService(context, intent)
+            }.onFailure { exc ->
+                ProxyLogger.w("Cannot start foreground service: ${exc.javaClass.simpleName}: ${exc.message}")
+            }
         }
 
         fun stop(context: Context) {
+            ProxyController.stopAsync()
             val intent = Intent(context, ProxyForegroundService::class.java).apply {
                 action = ACTION_STOP
             }
-            context.startService(intent)
+            runCatching { context.startService(intent) }
         }
     }
 

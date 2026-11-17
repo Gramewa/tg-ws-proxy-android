@@ -14,6 +14,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.IOException
+import java.net.URI
 import java.util.concurrent.TimeUnit
 
 data class ReleaseInfo(
@@ -78,6 +79,25 @@ object AppUpdater {
         return false
     }
 
+    fun isTrustedGithubHttpsUrl(rawUrl: String): Boolean {
+        val trimmed = rawUrl.trim()
+        if (trimmed.isEmpty()) return false
+        val uri = try {
+            URI(trimmed)
+        } catch (_: Exception) {
+            return false
+        }
+        if (!uri.scheme.equals("https", ignoreCase = true)) return false
+        val host = uri.host?.lowercase() ?: return false
+        val path = uri.rawPath.orEmpty()
+        return when (host) {
+            "github.com" -> path.startsWith("/$GITHUB_REPO/", ignoreCase = true)
+            "objects.githubusercontent.com",
+            "release-assets.githubusercontent.com" -> true
+            else -> false
+        }
+    }
+
     fun parseReleaseJson(jsonText: String): ReleaseInfo? {
         return try {
             val obj = JSONObject(jsonText)
@@ -92,7 +112,8 @@ object AppUpdater {
                 .substringBefore('+')
             val title = obj.optString("name", "").trim().ifEmpty { tagName }
             val notes = obj.optString("body", "").trim()
-            val htmlUrl = obj.optString("html_url", RELEASES_PAGE_URL).trim().ifEmpty { RELEASES_PAGE_URL }
+            val rawHtmlUrl = obj.optString("html_url", RELEASES_PAGE_URL).trim()
+            val htmlUrl = if (isTrustedGithubHttpsUrl(rawHtmlUrl)) rawHtmlUrl else RELEASES_PAGE_URL
 
             var apkUrl: String? = null
             var apkName: String? = null
@@ -104,10 +125,13 @@ object AppUpdater {
                     val asset = assets.optJSONObject(i) ?: continue
                     val name = asset.optString("name", "").trim()
                     if (name.endsWith(".apk", ignoreCase = true) && !name.contains("debug", ignoreCase = true)) {
-                        apkUrl = asset.optString("browser_download_url", "").trim().ifEmpty { null }
-                        apkName = name
-                        apkSize = asset.optLong("size", 0L)
-                        break
+                        val rawUrl = asset.optString("browser_download_url", "").trim()
+                        if (isTrustedGithubHttpsUrl(rawUrl)) {
+                            apkUrl = rawUrl
+                            apkName = name
+                            apkSize = asset.optLong("size", 0L)
+                            break
+                        }
                     }
                 }
             }
@@ -196,12 +220,15 @@ object AppUpdater {
     }
 
     fun openUpdateDownload(context: Context, release: ReleaseInfo) {
-        val targetUrl = release.apkDownloadUrl?.takeIf { it.isNotBlank() } ?: release.htmlUrl
+        val targetUrl = listOfNotNull(release.apkDownloadUrl, release.htmlUrl)
+            .firstOrNull { isTrustedGithubHttpsUrl(it) }
+            ?: RELEASES_PAGE_URL
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         runCatching { context.startActivity(intent) }.onFailure {
-            val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(release.htmlUrl)).apply {
+            val safeHtml = if (isTrustedGithubHttpsUrl(release.htmlUrl)) release.htmlUrl else RELEASES_PAGE_URL
+            val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(safeHtml)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             runCatching { context.startActivity(fallback) }

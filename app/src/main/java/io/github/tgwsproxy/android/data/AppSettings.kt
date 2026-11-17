@@ -4,7 +4,9 @@ import io.github.tgwsproxy.android.proxy.DcParseResult
 import io.github.tgwsproxy.android.proxy.ProxyConfig
 import io.github.tgwsproxy.android.proxy.coerceDomainList
 import io.github.tgwsproxy.android.proxy.generateSecretHex
+import io.github.tgwsproxy.android.proxy.isValidDomain
 import io.github.tgwsproxy.android.proxy.isValidSecretHex
+import io.github.tgwsproxy.android.proxy.normalizeDomainPool
 import io.github.tgwsproxy.android.proxy.parseDcIpRules
 
 data class AppSettings(
@@ -27,7 +29,7 @@ data class AppSettings(
     val autoStartOnBoot: Boolean = false,
     val keepWakeLock: Boolean = false,
     val themeMode: String = "auto",
-    val colorPalette: String = "ocean",
+    val colorPalette: String = "obsidian",
     val dynamicColors: Boolean = false,
     val language: String = "ru",
     val simpleMode: Boolean = true,
@@ -61,14 +63,14 @@ data class AppSettings(
             poolSize = poolSize.coerceIn(0, 16),
             fallbackCfproxy = cfproxyEnabled,
             cfproxyUserDomains = if (cfproxyCustomDomainsEnabled) {
-                coerceDomainList(cfproxyCustomDomains)
+                normalizeDomainPool(coerceDomainList(cfproxyCustomDomains))
             } else {
                 emptyList()
             },
-            cfproxyWorkerDomains = coerceDomainList(cfworkerDomains),
+            cfproxyWorkerDomains = normalizeDomainPool(coerceDomainList(cfworkerDomains)),
             cfproxyH2Media = cfproxyH2Media,
             disableSecure = disableSecure,
-            fakeTlsDomain = fakeTlsDomain.trim(),
+            fakeTlsDomain = fakeTlsDomain.trim().lowercase().let { if (isValidDomain(it)) it else "" },
             proxyProtocol = proxyProtocol,
             forceTestDc = forceTestDc,
             verbose = verboseLogging,
