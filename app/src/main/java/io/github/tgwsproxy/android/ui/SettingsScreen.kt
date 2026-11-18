@@ -156,7 +156,7 @@ fun SettingsScreen(strings: AppStrings) {
     var testDialogTitle by remember { mutableStateOf<String?>(null) }
     var testDialogBody by remember { mutableStateOf("") }
 
-    val applyNetworkSettings = {
+    val applyNetworkSettings: () -> Unit = {
         val err = validateDraft(
             draft = draft,
             portText = portText,

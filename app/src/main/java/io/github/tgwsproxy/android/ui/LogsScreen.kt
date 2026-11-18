@@ -228,119 +228,143 @@ fun LogsScreen(strings: AppStrings) {
             )
         }
 
-        Surface(
+        LogConsoleCard(
+            filtered = filtered,
+            listState = listState,
+            isAtBottom = isAtBottom,
+            emptyText = strings.logsEmpty,
+            jumpLatestText = strings.btnJumpLatest,
+            onJumpLatest = {
+                scope.launch {
+                    if (filtered.isNotEmpty()) {
+                        listState.animateScrollToItem(filtered.lastIndex)
+                    }
+                }
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            color = velvet.consoleBg,
-            border = rememberRimBorder(velvet.rim),
-            shape = RoundedCornerShape(22.dp),
-        ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                if (filtered.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = strings.logsEmpty,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = cs.onSurfaceVariant,
-                        )
-                    }
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp),
-                    ) {
-                        items(
-                            items = filtered,
-                            key = { it.id },
-                        ) { entry ->
-                            val levelColor = when (entry.level) {
-                                LogLevel.ERROR -> if (velvet.isDark) Color(0xFFF87171) else Color(0xFFDC2626)
-                                LogLevel.WARN -> velvet.warning
-                                LogLevel.DEBUG -> cs.onSurfaceVariant
-                                LogLevel.INFO -> velvet.accent
-                            }
-                            val levelShort = when (entry.level) {
-                                LogLevel.ERROR -> "E"
-                                LogLevel.WARN -> "W"
-                                LogLevel.DEBUG -> "D"
-                                LogLevel.INFO -> "I"
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                            ) {
-                                Text(
-                                    text = entry.timeText,
-                                    color = cs.onSurfaceVariant.copy(alpha = 0.75f),
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp,
-                                    lineHeight = 15.sp,
-                                )
-                                Text(
-                                    text = levelShort,
-                                    color = levelColor,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp,
-                                    lineHeight = 15.sp,
-                                )
-                                Text(
-                                    text = entry.message,
-                                    color = cs.onSurface,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.5.sp,
-                                    lineHeight = 15.5.sp,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
+        )
+    }
+}
+
+@Composable
+private fun LogConsoleCard(
+    filtered: List<io.github.tgwsproxy.android.proxy.LogEntry>,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    isAtBottom: Boolean,
+    emptyText: String,
+    jumpLatestText: String,
+    onJumpLatest: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val velvet = MaterialTheme.velvet
+    val cs = MaterialTheme.colorScheme
+
+    Surface(
+        modifier = modifier,
+        color = velvet.consoleBg,
+        border = rememberRimBorder(velvet.rim),
+        shape = RoundedCornerShape(22.dp),
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (filtered.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = emptyText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = cs.onSurfaceVariant,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    items(
+                        items = filtered,
+                        key = { it.id },
+                    ) { entry ->
+                        val levelColor = when (entry.level) {
+                            LogLevel.ERROR -> if (velvet.isDark) Color(0xFFF87171) else Color(0xFFDC2626)
+                            LogLevel.WARN -> velvet.warning
+                            LogLevel.DEBUG -> cs.onSurfaceVariant
+                            LogLevel.INFO -> velvet.accent
+                        }
+                        val levelShort = when (entry.level) {
+                            LogLevel.ERROR -> "E"
+                            LogLevel.WARN -> "W"
+                            LogLevel.DEBUG -> "D"
+                            LogLevel.INFO -> "I"
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        ) {
+                            Text(
+                                text = entry.timeText,
+                                color = cs.onSurfaceVariant.copy(alpha = 0.75f),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp,
+                            )
+                            Text(
+                                text = levelShort,
+                                color = levelColor,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp,
+                            )
+                            Text(
+                                text = entry.message,
+                                color = cs.onSurface,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.5.sp,
+                                lineHeight = 15.5.sp,
+                                modifier = Modifier.weight(1f),
+                            )
                         }
                     }
                 }
+            }
 
-                AnimatedVisibility(
-                    visible = filtered.isNotEmpty() && !isAtBottom,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(12.dp),
-                    enter = fadeIn(tween(150)),
-                    exit = fadeOut(tween(120)),
+            AnimatedVisibility(
+                visible = filtered.isNotEmpty() && !isAtBottom,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(12.dp),
+                enter = fadeIn(tween(150)),
+                exit = fadeOut(tween(120)),
+            ) {
+                Surface(
+                    onClick = onJumpLatest,
+                    shape = RoundedCornerShape(999.dp),
+                    color = velvet.accent,
+                    contentColor = velvet.onAccent,
+                    shadowElevation = 6.dp,
                 ) {
-                    Surface(
-                        onClick = {
-                            scope.launch {
-                                if (filtered.isNotEmpty()) {
-                                    listState.animateScrollToItem(filtered.lastIndex)
-                                }
-                            }
-                        },
-                        shape = RoundedCornerShape(999.dp),
-                        color = velvet.accent,
-                        contentColor = velvet.onAccent,
-                        shadowElevation = 6.dp,
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.ArrowDownward,
-                                contentDescription = null,
-                                modifier = Modifier.size(15.dp),
-                            )
-                            Text(
-                                text = strings.btnJumpLatest,
-                                style = MaterialTheme.typography.labelMedium,
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Rounded.ArrowDownward,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp),
+                        )
+                        Text(
+                            text = jumpLatestText,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
                     }
                 }
             }

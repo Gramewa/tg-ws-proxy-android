@@ -149,7 +149,7 @@ fun ConnectionScreen(
         Toast.makeText(context, strings.toastLinkCopied, Toast.LENGTH_SHORT).show()
     }
 
-    val shareLink = {
+    val shareLink: () -> Unit = {
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, proxyLink)
