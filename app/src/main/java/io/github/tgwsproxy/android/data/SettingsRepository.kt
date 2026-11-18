@@ -40,13 +40,13 @@ class SettingsRepository(private val context: Context) {
         val AUTO_START_ON_BOOT = booleanPreferencesKey("auto_start_on_boot")
         val KEEP_WAKE_LOCK = booleanPreferencesKey("keep_wake_lock")
         val THEME_MODE = stringPreferencesKey("theme_mode")
-        val COLOR_PALETTE = stringPreferencesKey("color_palette")
         val DYNAMIC_COLORS = booleanPreferencesKey("dynamic_colors")
         val LANGUAGE = stringPreferencesKey("language")
         val SIMPLE_MODE = booleanPreferencesKey("simple_mode")
         val CHECK_UPDATES_ON_STARTUP = booleanPreferencesKey("check_updates_on_startup")
         val POSTPONED_UPDATE_VERSION = stringPreferencesKey("postponed_update_version")
         val POSTPONED_UPDATE_UNTIL_MS = longPreferencesKey("postponed_update_until_ms")
+        val WAS_RUNNING = booleanPreferencesKey("was_running")
     }
 
     private fun defaultLanguage(): String {
@@ -75,18 +75,17 @@ class SettingsRepository(private val context: Context) {
             autoStartOnBoot = prefs[Keys.AUTO_START_ON_BOOT] ?: false,
             keepWakeLock = prefs[Keys.KEEP_WAKE_LOCK] ?: false,
             themeMode = prefs[Keys.THEME_MODE] ?: "auto",
-            colorPalette = prefs[Keys.COLOR_PALETTE] ?: "obsidian",
             dynamicColors = prefs[Keys.DYNAMIC_COLORS] ?: false,
             language = prefs[Keys.LANGUAGE] ?: defaultLanguage(),
             simpleMode = prefs[Keys.SIMPLE_MODE] ?: true,
             checkUpdatesOnStartup = prefs[Keys.CHECK_UPDATES_ON_STARTUP] ?: true,
             postponedUpdateVersion = prefs[Keys.POSTPONED_UPDATE_VERSION] ?: "",
             postponedUpdateUntilMs = prefs[Keys.POSTPONED_UPDATE_UNTIL_MS] ?: 0L,
+            wasRunning = prefs[Keys.WAS_RUNNING] ?: false,
         )
     }
 
     suspend fun ensureInitialized(): AppSettings {
-        var result: AppSettings? = null
         context.dataStore.edit { prefs ->
             val currentSecret = prefs[Keys.SECRET].orEmpty()
             if (!isValidSecretHex(currentSecret)) {
@@ -96,8 +95,13 @@ class SettingsRepository(private val context: Context) {
                 prefs[Keys.LANGUAGE] = defaultLanguage()
             }
         }
-        result = settingsFlow.first()
-        return result
+        return settingsFlow.first()
+    }
+
+    suspend fun setWasRunning(running: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.WAS_RUNNING] = running
+        }
     }
 
     suspend fun update(transform: (AppSettings) -> AppSettings): AppSettings {
@@ -132,13 +136,13 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.AUTO_START_ON_BOOT] = settings.autoStartOnBoot
             prefs[Keys.KEEP_WAKE_LOCK] = settings.keepWakeLock
             prefs[Keys.THEME_MODE] = settings.themeMode
-            prefs[Keys.COLOR_PALETTE] = settings.colorPalette
             prefs[Keys.DYNAMIC_COLORS] = settings.dynamicColors
             prefs[Keys.LANGUAGE] = settings.language
             prefs[Keys.SIMPLE_MODE] = settings.simpleMode
             prefs[Keys.CHECK_UPDATES_ON_STARTUP] = settings.checkUpdatesOnStartup
             prefs[Keys.POSTPONED_UPDATE_VERSION] = settings.postponedUpdateVersion
             prefs[Keys.POSTPONED_UPDATE_UNTIL_MS] = settings.postponedUpdateUntilMs
+            prefs[Keys.WAS_RUNNING] = settings.wasRunning
         }
     }
 }

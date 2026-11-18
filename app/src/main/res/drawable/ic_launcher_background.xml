@@ -5,37 +5,35 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Deep obsidian-to-ocean backdrop gradient -->
     <path android:pathData="M0,0 L108,0 L108,108 L0,108 Z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:type="linear"
-                android:startX="0"
-                android:startY="0"
-                android:endX="108"
-                android:endY="108"
-                android:startColor="#FF050B16"
-                android:centerColor="#FF0B2239"
-                android:endColor="#FF035388" />
+                android:startX="18"
+                android:startY="8"
+                android:endX="92"
+                android:endY="102"
+                android:startColor="#FF0C0F15"
+                android:centerColor="#FF121C2D"
+                android:endColor="#FF162C4E" />
         </aapt:attr>
     </path>
 
-    <!-- Soft ambient cyan glow behind center signal -->
-    <path android:pathData="M54,10 A44,44 0 1,1 53.99,10 Z">
+    <path android:pathData="M0,74 C24,72 36,60 56,62 C76,64 88,52 108,50 L108,108 L0,108 Z">
         <aapt:attr name="android:fillColor">
             <gradient
-                android:type="radial"
-                android:centerX="54"
-                android:centerY="54"
-                android:gradientRadius="44"
-                android:startColor="#3D22D3EE"
-                android:endColor="#00050B16" />
+                android:type="linear"
+                android:startX="54"
+                android:startY="50"
+                android:endX="54"
+                android:endY="108"
+                android:startColor="#2E85B2FF"
+                android:endColor="#0585B2FF" />
         </aapt:attr>
     </path>
 
-    <!-- Precision outer radar ring -->
     <path
-        android:pathData="M54,17 A37,37 0 1,1 53.99,17 Z"
-        android:strokeColor="#1F38BDF8"
-        android:strokeWidth="1.0" />
+        android:pathData="M0,74 C24,72 36,60 56,62 C76,64 88,52 108,50"
+        android:strokeColor="#4D85B2FF"
+        android:strokeWidth="1.4" />
 </vector>

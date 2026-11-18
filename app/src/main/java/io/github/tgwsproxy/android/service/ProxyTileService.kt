@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 class ProxyTileService : TileService() {
@@ -20,8 +21,13 @@ class ProxyTileService : TileService() {
         ProxyController.init(applicationContext)
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         stateJob = scope?.launch {
-            ProxyController.isRunning.collect { running ->
-                updateTile(running)
+            combine(
+                ProxyController.isRunning,
+                ProxyController.isTransitioning,
+            ) { running, transitioning ->
+                running to transitioning
+            }.collect { (running, transitioning) ->
+                updateTile(running = running, transitioning = transitioning)
             }
         }
     }
@@ -37,24 +43,30 @@ class ProxyTileService : TileService() {
     override fun onClick() {
         super.onClick()
         ProxyController.init(applicationContext)
+        if (ProxyController.isTransitioning.value) return
         if (ProxyController.isRunning.value) {
             ProxyForegroundService.stop(applicationContext)
-            updateTile(false)
+            updateTile(running = false, transitioning = true)
         } else {
             ProxyForegroundService.start(applicationContext)
-            updateTile(true)
+            updateTile(running = true, transitioning = true)
         }
     }
 
-    private fun updateTile(running: Boolean) {
+    private fun updateTile(running: Boolean, transitioning: Boolean) {
         val tile = qsTile ?: return
-        tile.state = if (running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        tile.state = when {
+            transitioning -> Tile.STATE_UNAVAILABLE
+            running -> Tile.STATE_ACTIVE
+            else -> Tile.STATE_INACTIVE
+        }
         val cfg = ProxyController.settings.value
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = if (running) {
-                if (cfg.disableSecure) ":${cfg.port} • HTTP 80" else ":${cfg.port}"
-            } else {
-                null
+            val isRu = cfg.language == "ru"
+            tile.subtitle = when {
+                transitioning -> if (isRu) "Подождите…" else "Starting…"
+                running -> if (cfg.disableSecure) ":${cfg.port} · HTTP 80" else ":${cfg.port}"
+                else -> null
             }
         }
         tile.updateTile()

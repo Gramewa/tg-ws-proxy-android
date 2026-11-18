@@ -18,10 +18,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -37,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.tgwsproxy.android.BuildConfig
+import io.github.tgwsproxy.android.proxy.humanBytes
 import io.github.tgwsproxy.android.service.ProxyController
 import io.github.tgwsproxy.android.update.AppUpdater
 import io.github.tgwsproxy.android.update.ReleaseInfo
@@ -47,22 +49,30 @@ fun UpdateDialog(
     strings: AppStrings,
 ) {
     val context = LocalContext.current
+    val velvet = MaterialTheme.velvet
+    val cs = MaterialTheme.colorScheme
+
+    val downloadLabel = if (release.apkSizeBytes > 0L) {
+        "${strings.btnDownloadInstall} · ${humanBytes(release.apkSizeBytes)}"
+    } else {
+        strings.btnDownloadInstall
+    }
 
     AlertDialog(
         onDismissRequest = { AppUpdater.dismissDialog() },
+        containerColor = velvet.card,
+        shape = RoundedCornerShape(28.dp),
         icon = {
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.size(48.dp),
+            VelvetIconBadge(
+                containerColor = velvet.liveGreenSoft,
+                contentColor = velvet.liveGreen,
+                size = 48.dp,
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.SystemUpdate,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Rounded.SystemUpdate,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                )
             }
         },
         title = {
@@ -73,10 +83,9 @@ fun UpdateDialog(
                 Text(
                     text = strings.updateDialogTitle,
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
                 )
                 Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    color = velvet.accentSoft,
                     shape = RoundedCornerShape(999.dp),
                 ) {
                     Text(
@@ -84,7 +93,7 @@ fun UpdateDialog(
                         style = MaterialTheme.typography.labelLarge,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        color = velvet.accent,
                         maxLines = 1,
                         softWrap = false,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
@@ -101,8 +110,8 @@ fun UpdateDialog(
                         .fillMaxWidth()
                         .heightIn(max = 220.dp)
                         .background(
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                            shape = RoundedCornerShape(12.dp),
+                            color = velvet.cardSub,
+                            shape = RoundedCornerShape(14.dp),
                         )
                         .verticalScroll(rememberScrollState())
                         .padding(12.dp),
@@ -110,14 +119,14 @@ fun UpdateDialog(
                     Text(
                         text = release.notes.ifBlank { release.title },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = cs.onSurface,
                     )
                 }
 
                 Text(
                     text = strings.updateDownloadHint,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = cs.onSurfaceVariant,
                 )
             }
         },
@@ -129,11 +138,15 @@ fun UpdateDialog(
                 Button(
                     onClick = { AppUpdater.openUpdateDownload(context, release) },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = velvet.accent,
+                        contentColor = velvet.onAccent,
+                    ),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 ) {
                     Text(
-                        text = strings.btnDownloadInstall,
+                        text = downloadLabel,
                         maxLines = 1,
                         softWrap = false,
                         overflow = TextOverflow.Ellipsis,
@@ -146,15 +159,20 @@ fun UpdateDialog(
                 ) {
                     OutlinedButton(
                         onClick = {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(release.htmlUrl))
+                            val safeUrl = if (AppUpdater.isTrustedGithubHttpsUrl(release.htmlUrl)) {
+                                release.htmlUrl
+                            } else {
+                                AppUpdater.RELEASES_PAGE_URL
+                            }
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(safeUrl))
                             runCatching { context.startActivity(intent) }
                         },
                         modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(13.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.OpenInNew,
+                            Icons.AutoMirrored.Rounded.OpenInNew,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp),
                         )

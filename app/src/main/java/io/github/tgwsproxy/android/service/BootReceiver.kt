@@ -20,7 +20,12 @@ class BootReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val settings = SettingsRepository(appContext).ensureInitialized()
-                if (settings.autoStartOnBoot) {
+                val shouldStart = when (action) {
+                    Intent.ACTION_BOOT_COMPLETED -> settings.autoStartOnBoot
+                    Intent.ACTION_MY_PACKAGE_REPLACED -> settings.wasRunning || settings.autoStartOnBoot
+                    else -> false
+                }
+                if (shouldStart) {
                     runCatching { ProxyForegroundService.start(appContext) }
                 }
             } finally {

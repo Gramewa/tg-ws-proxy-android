@@ -4,35 +4,35 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Orbital relay arc around safe-zone center (54,54) -->
+    <!-- Subtle carrier wave inside safe zone -->
     <path
-        android:pathData="M82.06,44.88 A29.5,29.5 0 1,1 67.85,27.95"
-        android:strokeColor="#6638BDF8"
+        android:pathData="M30,68 C40,68 45,62 54,63 C63,64 69,57 78,56"
+        android:strokeColor="#8085B2FF"
         android:strokeLineCap="round"
         android:strokeWidth="2.4" />
 
-    <!-- Active signal beacon in orbital gap -->
+    <!-- Live wave tip dot -->
     <path
-        android:fillColor="#34D399"
-        android:pathData="M76.8,30.6 A3.2,3.2 0 1,1 76.79,30.6 Z" />
+        android:fillColor="#4ADE80"
+        android:pathData="M78,53.2 A2.8,2.8 0 1,1 77.99,53.2 Z" />
 
-    <!-- Facet 1: Left main wing (bright crisp white) -->
+    <!-- Left main wing -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M33.5,50.0 L70.5,36.5 L47.2,55.2 Z" />
+        android:pathData="M31.5,47.5 L72.0,32.5 L46.8,52.8 Z" />
 
-    <!-- Facet 2: Inner fuselage fold -->
+    <!-- Inner fold -->
     <path
-        android:fillColor="#BAE6FD"
-        android:pathData="M47.2,55.2 L70.5,36.5 L52.3,58.6 L49.0,67.8 Z" />
+        android:fillColor="#C6DBFF"
+        android:pathData="M46.8,52.8 L72.0,32.5 L52.4,56.5 L48.6,65.2 Z" />
 
-    <!-- Facet 3: Under-wing depth shadow -->
+    <!-- Under-wing shadow -->
     <path
-        android:fillColor="#38BDF8"
-        android:pathData="M49.0,67.8 L52.3,58.6 L56.2,62.0 Z" />
+        android:fillColor="#85B2FF"
+        android:pathData="M48.6,65.2 L52.4,56.5 L56.8,60.0 Z" />
 
-    <!-- Facet 4: Right main wing (cool ice highlight) -->
+    <!-- Right main wing -->
     <path
-        android:fillColor="#E0F2FE"
-        android:pathData="M52.3,58.6 L70.5,36.5 L63.5,68.5 Z" />
+        android:fillColor="#EAF2FF"
+        android:pathData="M52.4,56.5 L72.0,32.5 L64.4,66.0 Z" />
 </vector>

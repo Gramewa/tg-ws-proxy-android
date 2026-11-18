@@ -4,18 +4,18 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,88 +25,111 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ListAlt
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
+import androidx.compose.material.icons.automirrored.rounded.ListAlt
+import androidx.compose.material.icons.rounded.PowerSettingsNew
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.tgwsproxy.android.data.AppSettings
 import io.github.tgwsproxy.android.service.ProxyController
-import io.github.tgwsproxy.android.ui.AmbientAuroraBackground
+import io.github.tgwsproxy.android.service.ProxyForegroundService
+import io.github.tgwsproxy.android.ui.AppStrings
 import io.github.tgwsproxy.android.ui.ConnectionScreen
 import io.github.tgwsproxy.android.ui.InfoScreen
+import io.github.tgwsproxy.android.ui.LiveStatusDot
 import io.github.tgwsproxy.android.ui.LogsScreen
 import io.github.tgwsproxy.android.ui.SettingsScreen
 import io.github.tgwsproxy.android.ui.TgWsProxyTheme
 import io.github.tgwsproxy.android.ui.UpdateDialog
+import io.github.tgwsproxy.android.ui.rememberRimBorder
 import io.github.tgwsproxy.android.ui.stringsFor
+import io.github.tgwsproxy.android.ui.velvet
 import io.github.tgwsproxy.android.update.AppUpdater
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
+    private var askedNotificationPermThisSession = false
+
     private val notificationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+            ProxyForegroundService.start(applicationContext)
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ProxyController.init(applicationContext)
         enableEdgeToEdge()
-        requestNotificationPermissionIfNeeded()
 
         setContent {
-            TgWsProxyRoot()
+            TgWsProxyRoot(
+                onRequestStartProxy = ::startProxyWithPermissionIfNeeded,
+            )
         }
     }
 
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    private fun startProxyWithPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !askedNotificationPermThisSession) {
             val granted = ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.POST_NOTIFICATIONS,
             ) == PackageManager.PERMISSION_GRANTED
             if (!granted) {
+                askedNotificationPermThisSession = true
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
             }
         }
+        ProxyForegroundService.start(applicationContext)
     }
 }
 
 @Composable
-private fun TgWsProxyRoot() {
+private fun TgWsProxyRoot(
+    onRequestStartProxy: () -> Unit,
+) {
     val settings by ProxyController.settings.collectAsStateWithLifecycle()
     val isRunning by ProxyController.isRunning.collectAsStateWithLifecycle()
     val isTransitioning by ProxyController.isTransitioning.collectAsStateWithLifecycle()
@@ -115,6 +138,7 @@ private fun TgWsProxyRoot() {
 
     val strings = stringsFor(settings.language)
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var showAppearanceSheet by rememberSaveable { mutableStateOf(false) }
     var didStartupUpdateCheck by remember { mutableStateOf(false) }
 
     LaunchedEffect(settings.secret) {
@@ -137,101 +161,108 @@ private fun TgWsProxyRoot() {
         }
     }
 
+    BackHandler(enabled = !settings.simpleMode && selectedTab != 0) {
+        selectedTab = 0
+    }
+
     TgWsProxyTheme(
         themeMode = settings.themeMode,
-        colorPalette = settings.colorPalette,
         dynamicColors = settings.dynamicColors,
     ) {
-        AmbientAuroraBackground(
-            isRunning = isRunning,
-            isTransitioning = isTransitioning,
-        ) {
-            Scaffold(
-                containerColor = Color.Transparent,
-                contentColor = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.fillMaxSize(),
-                topBar = {
-                    CyberTopBar(
-                        title = strings.appName,
-                        isRunning = isRunning,
-                        isTransitioning = isTransitioning,
-                        hasUpdate = availableRelease != null,
-                        updateDesc = strings.updateDialogTitle,
-                        isSimple = settings.simpleMode,
-                        simpleLabel = strings.modeSimple,
-                        expertLabel = strings.modeExpert,
-                        onOpenUpdate = { AppUpdater.openDialog() },
-                        onSelectMode = { ProxyController.setSimpleModeAsync(it) },
-                    )
-                },
-                bottomBar = {
-                    AnimatedVisibility(
-                        visible = !settings.simpleMode,
-                        enter = fadeIn(tween(200)) + slideInVertically { it / 2 },
-                        exit = fadeOut(tween(150)) + slideOutVertically { it / 2 },
-                    ) {
-                        FloatingGlassDock(
-                            selectedTab = selectedTab,
-                            onSelectTab = { selectedTab = it },
-                            items = listOf(
-                                DockItem(Icons.Default.PowerSettingsNew, strings.navConnection),
-                                DockItem(Icons.Default.Settings, strings.navSettings),
-                                DockItem(Icons.AutoMirrored.Filled.ListAlt, strings.navLogs),
-                                DockItem(Icons.Default.Info, strings.navInfo),
-                            ),
-                        )
-                    }
-                },
-            ) { innerPadding ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
+        val velvet = MaterialTheme.velvet
+
+        Scaffold(
+            containerColor = velvet.bg,
+            contentColor = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.fillMaxSize(),
+            topBar = {
+                VelvetTopBar(
+                    title = strings.appName,
+                    isRunning = isRunning,
+                    isTransitioning = isTransitioning,
+                    hasUpdate = availableRelease != null,
+                    updateDesc = strings.updateDialogTitle,
+                    appearanceDesc = strings.appearanceSheetTitle,
+                    isSimple = settings.simpleMode,
+                    simpleLabel = strings.modeSimple,
+                    expertLabel = strings.modeExpert,
+                    onOpenUpdate = { AppUpdater.openDialog() },
+                    onOpenAppearance = { showAppearanceSheet = true },
+                    onSelectMode = { ProxyController.setSimpleModeAsync(it) },
+                )
+            },
+            bottomBar = {
+                AnimatedVisibility(
+                    visible = !settings.simpleMode,
+                    enter = fadeIn(tween(180)) + slideInVertically { it / 2 },
+                    exit = fadeOut(tween(140)) + slideOutVertically { it / 2 },
                 ) {
-                    val tabToRender = if (settings.simpleMode) 0 else selectedTab
-                    when (tabToRender) {
-                        0 -> ConnectionScreen(strings)
-                        1 -> SettingsScreen(strings)
-                        2 -> LogsScreen(strings)
-                        else -> InfoScreen(strings)
-                    }
+                    VelvetBottomDock(
+                        selectedTab = selectedTab,
+                        onSelectTab = { selectedTab = it },
+                        items = listOf(
+                            DockItem(Icons.Rounded.PowerSettingsNew, strings.navConnection),
+                            DockItem(Icons.Rounded.Settings, strings.navSettings),
+                            DockItem(Icons.AutoMirrored.Rounded.ListAlt, strings.navLogs),
+                            DockItem(Icons.AutoMirrored.Rounded.HelpOutline, strings.navInfo),
+                        ),
+                    )
+                }
+            },
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+            ) {
+                val tabToRender = if (settings.simpleMode) 0 else selectedTab
+                when (tabToRender) {
+                    0 -> ConnectionScreen(
+                        strings = strings,
+                        onRequestStartProxy = onRequestStartProxy,
+                    )
+                    1 -> SettingsScreen(strings = strings)
+                    2 -> LogsScreen(strings = strings)
+                    else -> InfoScreen(strings = strings)
                 }
             }
+        }
 
-            val release = availableRelease
-            if (showUpdateDialog && release != null) {
-                UpdateDialog(
-                    release = release,
-                    strings = strings,
-                )
-            }
+        if (showAppearanceSheet) {
+            AppearanceBottomSheet(
+                strings = strings,
+                settings = settings,
+                onDismiss = { showAppearanceSheet = false },
+            )
+        }
+
+        val release = availableRelease
+        if (showUpdateDialog && release != null) {
+            UpdateDialog(
+                release = release,
+                strings = strings,
+            )
         }
     }
 }
 
 @Composable
-private fun CyberTopBar(
+private fun VelvetTopBar(
     title: String,
     isRunning: Boolean,
     isTransitioning: Boolean,
     hasUpdate: Boolean,
     updateDesc: String,
+    appearanceDesc: String,
     isSimple: Boolean,
     simpleLabel: String,
     expertLabel: String,
     onOpenUpdate: () -> Unit,
+    onOpenAppearance: () -> Unit,
     onSelectMode: (Boolean) -> Unit,
 ) {
+    val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
-    val dotColor by animateColorAsState(
-        targetValue = when {
-            isTransitioning -> cs.secondary
-            isRunning -> cs.tertiary
-            else -> cs.outline
-        },
-        animationSpec = tween(350),
-        label = "statusDot",
-    )
 
     Row(
         modifier = Modifier
@@ -245,40 +276,19 @@ private fun CyberTopBar(
             modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(cs.primary, cs.secondary),
-                        ),
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = null,
-                    tint = cs.onPrimary,
-                    modifier = Modifier.size(17.dp),
-                )
-            }
-            Spacer(Modifier.width(10.dp))
             Text(
                 text = title,
                 color = cs.onBackground,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.width(8.dp))
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(dotColor),
+            Spacer(Modifier.width(9.dp))
+            LiveStatusDot(
+                isRunning = isRunning,
+                isTransitioning = isTransitioning,
+                size = 7.dp,
             )
         }
 
@@ -287,16 +297,22 @@ private fun CyberTopBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (hasUpdate) {
-                IconButton(
+                Surface(
                     onClick = onOpenUpdate,
-                    modifier = Modifier.size(36.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = velvet.liveGreenSoft,
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.SystemUpdate,
-                        contentDescription = updateDesc,
-                        tint = cs.tertiary,
-                        modifier = Modifier.size(20.dp),
-                    )
+                    Box(
+                        modifier = Modifier.size(36.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.SystemUpdate,
+                            contentDescription = updateDesc,
+                            tint = velvet.liveGreen,
+                            modifier = Modifier.size(19.dp),
+                        )
+                    }
                 }
             }
 
@@ -306,6 +322,219 @@ private fun CyberTopBar(
                 expertLabel = expertLabel,
                 onSelect = onSelectMode,
             )
+
+            IconButton(
+                onClick = onOpenAppearance,
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(velvet.card),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Tune,
+                    contentDescription = appearanceDesc,
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppearanceBottomSheet(
+    strings: AppStrings,
+    settings: AppSettings,
+    onDismiss: () -> Unit,
+) {
+    val velvet = MaterialTheme.velvet
+    val cs = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val isCheckingUpdate by AppUpdater.isChecking.collectAsStateWithLifecycle()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = velvet.card,
+        contentColor = cs.onSurface,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                text = strings.appearanceSheetTitle,
+                style = MaterialTheme.typography.titleLarge,
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = strings.labelTheme,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = cs.onSurfaceVariant,
+                )
+                SegmentedChoiceBar(
+                    options = listOf(
+                        "auto" to strings.themeAuto,
+                        "light" to strings.themeLight,
+                        "dark" to strings.themeDark,
+                    ),
+                    selectedKey = settings.themeMode,
+                    onSelect = { ProxyController.setThemeModeAsync(it) },
+                )
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = velvet.cardSub,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { ProxyController.setDynamicColorsAsync(!settings.dynamicColors) }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(
+                                text = strings.labelDynamicColors,
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Text(
+                                text = strings.subDynamicColors,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = cs.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = settings.dynamicColors,
+                            onCheckedChange = { ProxyController.setDynamicColorsAsync(it) },
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = strings.labelLanguage,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = cs.onSurfaceVariant,
+                )
+                SegmentedChoiceBar(
+                    options = listOf(
+                        "ru" to strings.langRu,
+                        "en" to strings.langEn,
+                    ),
+                    selectedKey = settings.language,
+                    onSelect = { ProxyController.setLanguageAsync(it) },
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "v${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = cs.onSurfaceVariant,
+                )
+                FilledTonalButton(
+                    enabled = !isCheckingUpdate,
+                    onClick = {
+                        scope.launch {
+                            val found = AppUpdater.checkForUpdates(
+                                currentVersion = BuildConfig.VERSION_NAME,
+                                manual = true,
+                                postponedVersion = settings.postponedUpdateVersion,
+                                postponedUntilMs = settings.postponedUpdateUntilMs,
+                            )
+                            when {
+                                found != null -> onDismiss()
+                                AppUpdater.lastCheckStatus.value == "up_to_date" ->
+                                    Toast.makeText(context, strings.toastUpToDate, Toast.LENGTH_SHORT).show()
+                                else ->
+                                    Toast.makeText(context, strings.toastUpdateCheckFailed, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    if (isCheckingUpdate) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(15.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (isCheckingUpdate) strings.checkingUpdates else strings.btnCheckUpdatesNow,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SegmentedChoiceBar(
+    options: List<Pair<String, String>>,
+    selectedKey: String,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val velvet = MaterialTheme.velvet
+    val cs = MaterialTheme.colorScheme
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = velvet.cardSub,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            options.forEach { (key, label) ->
+                val selected = key == selectedKey
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (selected) velvet.accent else Color.Transparent)
+                        .clickable { onSelect(key) }
+                        .padding(vertical = 9.dp, horizontal = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        color = if (selected) velvet.onAccent else cs.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
 }
@@ -316,35 +545,27 @@ private data class DockItem(
 )
 
 @Composable
-private fun FloatingGlassDock(
+private fun VelvetBottomDock(
     selectedTab: Int,
     onSelectTab: (Int) -> Unit,
     items: List<DockItem>,
 ) {
+    val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
-    val isDark = cs.background.luminance() < 0.5f
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(26.dp),
-            color = cs.surface.copy(alpha = if (isDark) 0.88f else 0.94f),
+            shape = RoundedCornerShape(24.dp),
+            color = velvet.card,
             contentColor = cs.onSurface,
-            border = BorderStroke(
-                width = 1.dp,
-                brush = Brush.linearGradient(
-                    colors = listOf(
-                        cs.primary.copy(alpha = 0.28f),
-                        cs.outline.copy(alpha = 0.16f),
-                    ),
-                ),
-            ),
-            shadowElevation = 10.dp,
+            border = rememberRimBorder(velvet.rim),
+            shadowElevation = if (velvet.isDark) 8.dp else 4.dp,
         ) {
             Row(
                 modifier = Modifier
@@ -355,13 +576,13 @@ private fun FloatingGlassDock(
             ) {
                 items.forEachIndexed { index, item ->
                     val selected = selectedTab == index
-                    val bg = if (selected) cs.primary.copy(alpha = 0.16f) else Color.Transparent
-                    val fg = if (selected) cs.primary else cs.onSurfaceVariant
+                    val bg = if (selected) velvet.accentSoft else Color.Transparent
+                    val fg = if (selected) velvet.accent else cs.onSurfaceVariant
 
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(RoundedCornerShape(18.dp))
                             .background(bg)
                             .clickable { onSelectTab(index) }
                             .padding(vertical = 8.dp, horizontal = 4.dp),
@@ -398,15 +619,15 @@ private fun InterfaceModePill(
     onSelect: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
-    val isDark = cs.background.luminance() < 0.5f
 
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(999.dp),
-        color = cs.surface.copy(alpha = if (isDark) 0.78f else 0.88f),
+        shape = RoundedCornerShape(13.dp),
+        color = velvet.card,
         contentColor = cs.onSurface,
-        border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.24f)),
+        border = rememberRimBorder(velvet.rim),
     ) {
         Row(
             modifier = Modifier.padding(3.dp),
@@ -433,15 +654,16 @@ private fun ModeSegment(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
-    val bg = if (selected) cs.primary else Color.Transparent
-    val fg = if (selected) cs.onPrimary else cs.onSurfaceVariant
+    val bg = if (selected) velvet.accent else Color.Transparent
+    val fg = if (selected) velvet.onAccent else cs.onSurfaceVariant
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(bg)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .padding(horizontal = 11.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(

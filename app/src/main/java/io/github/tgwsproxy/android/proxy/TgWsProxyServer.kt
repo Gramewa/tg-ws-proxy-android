@@ -29,11 +29,18 @@ class TgWsProxyServer {
         private val random = SecureRandom()
     }
 
+    private val lastClientActivityMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
     private val balancer = DomainBalancer()
     private val cfRefresher = CfDomainRefresher(balancer)
     private val configRef = AtomicReference(ProxyConfig())
-    private val wsPool = WsPool { configRef.get() }
-    private val cfWorkerPool = CfWorkerPool { configRef.get() }
+    private val wsPool = WsPool(
+        configProvider = { configRef.get() },
+        isIdleHibernating = { System.currentTimeMillis() - lastClientActivityMs.get() > 180_000L },
+    )
+    private val cfWorkerPool = CfWorkerPool(
+        configProvider = { configRef.get() },
+        isIdleHibernating = { System.currentTimeMillis() - lastClientActivityMs.get() > 180_000L },
+    )
 
     @Volatile private var h2Pool: CfH2Pool? = null
     @Volatile private var serverSocket: ServerSocket? = null
@@ -49,6 +56,7 @@ class TgWsProxyServer {
             stop()
         }
 
+        lastClientActivityMs.set(System.currentTimeMillis())
         ProxyStats.reset()
         ProxyBridge.resetTcpBackoff()
         FakeTls.setProfiledAppdataLen(null)
@@ -167,6 +175,15 @@ class TgWsProxyServer {
         }
     }
 
+    fun onNetworkChanged() {
+        if (!isRunning) return
+        ProxyLogger.i("Network change detected: resetting backoff timers and refreshing idle pools")
+        ProxyBridge.resetTcpBackoff()
+        wsPool.onNetworkChanged()
+        cfWorkerPool.onNetworkChanged()
+        h2Pool?.onNetworkChanged()
+    }
+
     fun stop() {
         isRunning = false
         cfRefresher.stop()
@@ -191,6 +208,7 @@ class TgWsProxyServer {
         secret: ByteArray,
         config: ProxyConfig,
     ) {
+        lastClientActivityMs.set(System.currentTimeMillis())
         ProxyStats.connectionsTotal.incrementAndGet()
         ProxyStats.connectionsActive.incrementAndGet()
         val remoteIp = socket.inetAddress?.hostAddress ?: "?"

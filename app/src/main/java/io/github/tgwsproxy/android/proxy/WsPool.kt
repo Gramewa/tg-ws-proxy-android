@@ -17,6 +17,7 @@ import kotlin.math.min
 
 class WsPool(
     private val configProvider: () -> ProxyConfig,
+    private val isIdleHibernating: () -> Boolean = { false },
 ) {
     companion object {
         const val WS_POOL_MAX_AGE_MS = 120_000L
@@ -234,11 +235,12 @@ class WsPool(
                     ProxyLogger.d("WS pool rotated ${key.tag()}: ${expired.size} stale, $readyCount ready")
                 }
 
-                if (readyCount < configProvider().poolSize) {
+                if (!isIdleHibernating() && readyCount < configProvider().poolSize) {
                     scheduleRefill(key, targetIp, domains)
                 }
 
-                var wakeAt = now + WS_POOL_CHECK_INTERVAL_MS
+                val checkInterval = if (isIdleHibernating() && readyCount == 0) 30_000L else WS_POOL_CHECK_INTERVAL_MS
+                var wakeAt = now + checkInterval
                 if (oldestExpiry < wakeAt) {
                     wakeAt = oldestExpiry
                 }
@@ -309,6 +311,24 @@ class WsPool(
         ProxyLogger.i("WS pool warmup started for ${cfg.dcRedirects.size} DC(s)")
     }
 
+    fun onNetworkChanged() {
+        val toClose = ArrayList<RawWebSocket>()
+        synchronized(lock) {
+            for (bucket in idle.values) {
+                for (entry in bucket) {
+                    toClose.add(entry.ws)
+                }
+            }
+            idle.clear()
+            refillFailures.clear()
+            refillAfterMs.clear()
+        }
+        toClose.forEach { it.closeQuietly() }
+        if (!isIdleHibernating()) {
+            warmup()
+        }
+    }
+
     fun reset() {
         val toCancel = ArrayList<Job>()
         val toClose = ArrayList<RawWebSocket>()
@@ -334,6 +354,7 @@ class WsPool(
 
 class CfWorkerPool(
     private val configProvider: () -> ProxyConfig,
+    private val isIdleHibernating: () -> Boolean = { false },
 ) {
     companion object {
         const val WS_POOL_MAX_AGE_MS = 100_000L
@@ -550,11 +571,12 @@ class CfWorkerPool(
                 }
 
                 val limit = min(configProvider().poolSize, PER_DC_LIMIT)
-                if (readyCount < limit) {
+                if (!isIdleHibernating() && readyCount < limit) {
                     scheduleRefill(dc, fallbackDst, workerDomains)
                 }
 
-                var wakeAt = now + WS_POOL_CHECK_INTERVAL_MS
+                val checkInterval = if (isIdleHibernating() && readyCount == 0) 30_000L else WS_POOL_CHECK_INTERVAL_MS
+                var wakeAt = now + checkInterval
                 if (oldestExpiry < wakeAt) wakeAt = oldestExpiry
                 synchronized(lock) {
                     val after = refillAfterMs[dc]
@@ -609,6 +631,25 @@ class CfWorkerPool(
             scheduleRefill(dc, fallbackDst, domains)
         }
         ProxyLogger.i("CF worker pool warmup started for ${fallbacks.size} DC(s)")
+    }
+
+    fun onNetworkChanged() {
+        val toClose = ArrayList<RawWebSocket>()
+        synchronized(lock) {
+            for (bucket in idle.values) {
+                for (entry in bucket) {
+                    toClose.add(entry.ws)
+                }
+            }
+            idle.clear()
+            refillFailures.clear()
+            refillAfterMs.clear()
+        }
+        exhaustedUntilMs.clear()
+        toClose.forEach { it.closeQuietly() }
+        if (!isIdleHibernating()) {
+            warmup()
+        }
     }
 
     fun reset() {

@@ -3,22 +3,45 @@ package io.github.tgwsproxy.android.ui
 import android.app.Activity
 import android.os.Build
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ColorScheme
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.PowerSettingsNew
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -26,430 +49,288 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
+import kotlin.math.PI
+import kotlin.math.max
+import kotlin.math.sin
 
 @Immutable
-data class PaletteOption(
-    val id: String,
-    val previewColor: Color,
+data class VelvetColors(
+    val isDark: Boolean,
+    val bg: Color,
+    val card: Color,
+    val cardSub: Color,
+    val rim: Color,
+    val heroActive: Color,
+    val heroActiveRim: Color,
+    val accent: Color,
+    val onAccent: Color,
+    val accentSoft: Color,
+    val liveGreen: Color,
+    val liveGreenSoft: Color,
+    val warning: Color,
+    val warningSoft: Color,
+    val consoleBg: Color,
 )
 
-val AvailablePalettes = listOf(
-    PaletteOption("obsidian", Color(0xFF22D3EE)),
-    PaletteOption("ocean", Color(0xFF0284C7)),
-    PaletteOption("emerald", Color(0xFF10B981)),
-    PaletteOption("amethyst", Color(0xFF8B5CF6)),
-    PaletteOption("sunset", Color(0xFFF97316)),
+private val DarkVelvetColors = VelvetColors(
+    isDark = true,
+    bg = Color(0xFF0B0D11),
+    card = Color(0xFF141820),
+    cardSub = Color(0xFF1C222D),
+    rim = Color(0x12FFFFFF),
+    heroActive = Color(0xFF132642),
+    heroActiveRim = Color(0x3685B2FF),
+    accent = Color(0xFF85B2FF),
+    onAccent = Color(0xFF061D3D),
+    accentSoft = Color(0x2485B2FF),
+    liveGreen = Color(0xFF4ADE80),
+    liveGreenSoft = Color(0x244ADE80),
+    warning = Color(0xFFFBBF24),
+    warningSoft = Color(0x24FBBF24),
+    consoleBg = Color(0xFF0E1117),
 )
 
-private val ObsidianLight = lightColorScheme(
-    primary = Color(0xFF0E7490),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFCFFAFE),
-    onPrimaryContainer = Color(0xFF002028),
-    secondary = Color(0xFF4F46E5),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFE0E7FF),
-    onSecondaryContainer = Color(0xFF16134A),
-    tertiary = Color(0xFF059669),
-    onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFD1FAE5),
-    onTertiaryContainer = Color(0xFF002116),
-    background = Color(0xFFF1F5F9),
-    onBackground = Color(0xFF0F172A),
+private val LightVelvetColors = VelvetColors(
+    isDark = false,
+    bg = Color(0xFFF1F3F8),
+    card = Color(0xFFFFFFFF),
+    cardSub = Color(0xFFE6EBF4),
+    rim = Color(0x120F172A),
+    heroActive = Color(0xFFDAE7FF),
+    heroActiveRim = Color(0x2E2356C8),
+    accent = Color(0xFF2356C8),
+    onAccent = Color(0xFFFFFFFF),
+    accentSoft = Color(0x1A2356C8),
+    liveGreen = Color(0xFF16A34A),
+    liveGreenSoft = Color(0x1F16A34A),
+    warning = Color(0xFFD97706),
+    warningSoft = Color(0x1FD97706),
+    consoleBg = Color(0xFFF7F9FC),
+)
+
+private val VelvetDarkScheme = darkColorScheme(
+    primary = Color(0xFF85B2FF),
+    onPrimary = Color(0xFF061D3D),
+    primaryContainer = Color(0xFF173156),
+    onPrimaryContainer = Color(0xFFD8E6FF),
+    secondary = Color(0xFF9CB2D4),
+    onSecondary = Color(0xFF102238),
+    secondaryContainer = Color(0xFF213044),
+    onSecondaryContainer = Color(0xFFD6E3F8),
+    tertiary = Color(0xFF4ADE80),
+    onTertiary = Color(0xFF052E16),
+    tertiaryContainer = Color(0xFF0F3D24),
+    onTertiaryContainer = Color(0xFFBBF7D0),
+    background = Color(0xFF0B0D11),
+    onBackground = Color(0xFFECEFF6),
+    surface = Color(0xFF141820),
+    onSurface = Color(0xFFECEFF6),
+    surfaceVariant = Color(0xFF1C222D),
+    onSurfaceVariant = Color(0xFF939DB2),
+    outline = Color(0xFF414B5E),
+    outlineVariant = Color(0xFF252C3A),
+    error = Color(0xFFFCA5A5),
+    onError = Color(0xFF4C0509),
+    errorContainer = Color(0xFF5C161B),
+    onErrorContainer = Color(0xFFFEE2E2),
+)
+
+private val VelvetLightScheme = lightColorScheme(
+    primary = Color(0xFF2356C8),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFDAE7FF),
+    onPrimaryContainer = Color(0xFF081E4A),
+    secondary = Color(0xFF475875),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFDCE4F4),
+    onSecondaryContainer = Color(0xFF111E33),
+    tertiary = Color(0xFF16A34A),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFDCFCE7),
+    onTertiaryContainer = Color(0xFF052E16),
+    background = Color(0xFFF1F3F8),
+    onBackground = Color(0xFF11151E),
     surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF0F172A),
-    surfaceVariant = Color(0xFFE2E8F0),
-    onSurfaceVariant = Color(0xFF475569),
-    outline = Color(0xFF64748B),
+    onSurface = Color(0xFF11151E),
+    surfaceVariant = Color(0xFFE6EBF4),
+    onSurfaceVariant = Color(0xFF566074),
+    outline = Color(0xFF8B95A9),
+    outlineVariant = Color(0xFFD5DCE8),
     error = Color(0xFFDC2626),
-    onError = Color.White,
+    onError = Color(0xFFFFFFFF),
     errorContainer = Color(0xFFFEE2E2),
     onErrorContainer = Color(0xFF450A0A),
 )
 
-private val ObsidianDark = darkColorScheme(
-    primary = Color(0xFF22D3EE),
-    onPrimary = Color(0xFF002833),
-    primaryContainer = Color(0xFF0B3B4F),
-    onPrimaryContainer = Color(0xFFCFFAFE),
-    secondary = Color(0xFF818CF8),
-    onSecondary = Color(0xFF16134A),
-    secondaryContainer = Color(0xFF2B2870),
-    onSecondaryContainer = Color(0xFFE0E7FF),
-    tertiary = Color(0xFF10B981),
-    onTertiary = Color(0xFF00291B),
-    tertiaryContainer = Color(0xFF064E3B),
-    onTertiaryContainer = Color(0xFFA7F3D0),
-    background = Color(0xFF060B14),
-    onBackground = Color(0xFFE8F0FC),
-    surface = Color(0xFF0D1626),
-    onSurface = Color(0xFFE8F0FC),
-    surfaceVariant = Color(0xFF162338),
-    onSurfaceVariant = Color(0xFF94A7C2),
-    outline = Color(0xFF3A5070),
-    error = Color(0xFFFCA5A5),
-    onError = Color(0xFF5C0A0A),
-    errorContainer = Color(0xFF7F1D1D),
-    onErrorContainer = Color(0xFFFEE2E2),
+private val VelvetTypography = Typography(
+    headlineMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Bold,
+        fontSize = 26.sp,
+        lineHeight = 32.sp,
+        letterSpacing = (-0.5).sp,
+        fontFeatureSettings = "tnum",
+    ),
+    headlineSmall = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Bold,
+        fontSize = 22.sp,
+        lineHeight = 28.sp,
+        letterSpacing = (-0.4).sp,
+        fontFeatureSettings = "tnum",
+    ),
+    titleLarge = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Bold,
+        fontSize = 19.sp,
+        lineHeight = 24.sp,
+        letterSpacing = (-0.3).sp,
+        fontFeatureSettings = "tnum",
+    ),
+    titleMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        lineHeight = 21.sp,
+        letterSpacing = (-0.15).sp,
+        fontFeatureSettings = "tnum",
+    ),
+    titleSmall = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 14.sp,
+        lineHeight = 19.sp,
+        fontFeatureSettings = "tnum",
+    ),
+    bodyLarge = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 15.sp,
+        lineHeight = 21.sp,
+    ),
+    bodyMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 13.5.sp,
+        lineHeight = 19.sp,
+    ),
+    bodySmall = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 12.sp,
+        lineHeight = 16.5.sp,
+        fontFeatureSettings = "tnum",
+    ),
+    labelLarge = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 13.5.sp,
+        lineHeight = 18.sp,
+        fontFeatureSettings = "tnum",
+    ),
+    labelMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
+        fontFeatureSettings = "tnum",
+    ),
+    labelSmall = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Medium,
+        fontSize = 11.sp,
+        lineHeight = 14.sp,
+        fontFeatureSettings = "tnum",
+    ),
 )
 
-private val OceanLight = lightColorScheme(
-    primary = Color(0xFF0077B6),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFCAE9FF),
-    onPrimaryContainer = Color(0xFF001E30),
-    secondary = Color(0xFF0096C7),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFD6F0FF),
-    onSecondaryContainer = Color(0xFF00273B),
-    tertiary = Color(0xFF00A878),
-    onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFC2F7E4),
-    onTertiaryContainer = Color(0xFF002116),
-    background = Color(0xFFF3F7FC),
-    onBackground = Color(0xFF101824),
-    surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF101824),
-    surfaceVariant = Color(0xFFE4ECF5),
-    onSurfaceVariant = Color(0xFF425066),
-    outline = Color(0xFF73829A),
-    error = Color(0xFFBA1A1A),
-    onError = Color.White,
-    errorContainer = Color(0xFFFFDAD6),
-    onErrorContainer = Color(0xFF410002),
-)
+val LocalVelvetColors = staticCompositionLocalOf { DarkVelvetColors }
 
-private val OceanDark = darkColorScheme(
-    primary = Color(0xFF38BDF8),
-    onPrimary = Color(0xFF002A42),
-    primaryContainer = Color(0xFF06466B),
-    onPrimaryContainer = Color(0xFFCAE9FF),
-    secondary = Color(0xFF60A5FA),
-    onSecondary = Color(0xFF002952),
-    secondaryContainer = Color(0xFF123C69),
-    onSecondaryContainer = Color(0xFFD6E6FF),
-    tertiary = Color(0xFF2FE6A6),
-    onTertiary = Color(0xFF003824),
-    tertiaryContainer = Color(0xFF005538),
-    onTertiaryContainer = Color(0xFFC2F7E4),
-    background = Color(0xFF09111C),
-    onBackground = Color(0xFFE5ECF6),
-    surface = Color(0xFF111C2B),
-    onSurface = Color(0xFFE5ECF6),
-    surfaceVariant = Color(0xFF1B293D),
-    onSurfaceVariant = Color(0xFF9FB2C9),
-    outline = Color(0xFF63768F),
-    error = Color(0xFFFFB4AB),
-    onError = Color(0xFF690005),
-    errorContainer = Color(0xFF93000A),
-    onErrorContainer = Color(0xFFFFDAD6),
-)
+val MaterialTheme.velvet: VelvetColors
+    @Composable
+    @ReadOnlyComposable
+    get() = LocalVelvetColors.current
 
-private val EmeraldLight = lightColorScheme(
-    primary = Color(0xFF059669),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFC8F7E5),
-    onPrimaryContainer = Color(0xFF002116),
-    secondary = Color(0xFF0D9488),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFCCFBF1),
-    onSecondaryContainer = Color(0xFF00201D),
-    tertiary = Color(0xFF0284C7),
-    onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFD0EEFF),
-    onTertiaryContainer = Color(0xFF001E30),
-    background = Color(0xFFF3FAF7),
-    onBackground = Color(0xFF0E1D17),
-    surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF0E1D17),
-    surfaceVariant = Color(0xFFE1F0EA),
-    onSurfaceVariant = Color(0xFF3E554C),
-    outline = Color(0xFF6C847B),
-    error = Color(0xFFBA1A1A),
-    onError = Color.White,
-    errorContainer = Color(0xFFFFDAD6),
-    onErrorContainer = Color(0xFF410002),
-)
-
-private val EmeraldDark = darkColorScheme(
-    primary = Color(0xFF34D399),
-    onPrimary = Color(0xFF003824),
-    primaryContainer = Color(0xFF005437),
-    onPrimaryContainer = Color(0xFFC8F7E5),
-    secondary = Color(0xFF2DD4BF),
-    onSecondary = Color(0xFF003731),
-    secondaryContainer = Color(0xFF005048),
-    onSecondaryContainer = Color(0xFFCCFBF1),
-    tertiary = Color(0xFF38BDF8),
-    onTertiary = Color(0xFF002E45),
-    tertiaryContainer = Color(0xFF00486B),
-    onTertiaryContainer = Color(0xFFD0EEFF),
-    background = Color(0xFF08140F),
-    onBackground = Color(0xFFE2F1EA),
-    surface = Color(0xFF102019),
-    onSurface = Color(0xFFE2F1EA),
-    surfaceVariant = Color(0xFF1A3127),
-    onSurfaceVariant = Color(0xFF99B8AA),
-    outline = Color(0xFF5D7A6E),
-    error = Color(0xFFFFB4AB),
-    onError = Color(0xFF690005),
-    errorContainer = Color(0xFF93000A),
-    onErrorContainer = Color(0xFFFFDAD6),
-)
-
-private val AmethystLight = lightColorScheme(
-    primary = Color(0xFF6D28D9),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFE8DDFF),
-    onPrimaryContainer = Color(0xFF22005D),
-    secondary = Color(0xFF0284C7),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFD2EEFF),
-    onSecondaryContainer = Color(0xFF001E30),
-    tertiary = Color(0xFF059669),
-    onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFC7F6E3),
-    onTertiaryContainer = Color(0xFF002116),
-    background = Color(0xFFF6F4FC),
-    onBackground = Color(0xFF181426),
-    surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF181426),
-    surfaceVariant = Color(0xFFEAE5F5),
-    onSurfaceVariant = Color(0xFF4C4561),
-    outline = Color(0xFF7B7392),
-    error = Color(0xFFBA1A1A),
-    onError = Color.White,
-    errorContainer = Color(0xFFFFDAD6),
-    onErrorContainer = Color(0xFF410002),
-)
-
-private val AmethystDark = darkColorScheme(
-    primary = Color(0xFFA78BFA),
-    onPrimary = Color(0xFF2E0B70),
-    primaryContainer = Color(0xFF482392),
-    onPrimaryContainer = Color(0xFFE8DDFF),
-    secondary = Color(0xFF38BDF8),
-    onSecondary = Color(0xFF002D45),
-    secondaryContainer = Color(0xFF05476B),
-    onSecondaryContainer = Color(0xFFD2EEFF),
-    tertiary = Color(0xFF34D399),
-    onTertiary = Color(0xFF003824),
-    tertiaryContainer = Color(0xFF005437),
-    onTertiaryContainer = Color(0xFFC7F6E3),
-    background = Color(0xFF0E0B1A),
-    onBackground = Color(0xFFEAE6F7),
-    surface = Color(0xFF17132A),
-    onSurface = Color(0xFFEAE6F7),
-    surfaceVariant = Color(0xFF241E3D),
-    onSurfaceVariant = Color(0xFFAFA7C8),
-    outline = Color(0xFF70678B),
-    error = Color(0xFFFFB4AB),
-    onError = Color(0xFF690005),
-    errorContainer = Color(0xFF93000A),
-    onErrorContainer = Color(0xFFFFDAD6),
-)
-
-private val SunsetLight = lightColorScheme(
-    primary = Color(0xFFD9480F),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFFFE0D3),
-    onPrimaryContainer = Color(0xFF3B0E00),
-    secondary = Color(0xFFD97706),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFFFE8C2),
-    onSecondaryContainer = Color(0xFF331B00),
-    tertiary = Color(0xFF0D9488),
-    onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFC8F7F1),
-    onTertiaryContainer = Color(0xFF00201C),
-    background = Color(0xFFFCF7F4),
-    onBackground = Color(0xFF221815),
-    surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF221815),
-    surfaceVariant = Color(0xFFF3E7E1),
-    onSurfaceVariant = Color(0xFF5A4942),
-    outline = Color(0xFF8A766E),
-    error = Color(0xFFBA1A1A),
-    onError = Color.White,
-    errorContainer = Color(0xFFFFDAD6),
-    onErrorContainer = Color(0xFF410002),
-)
-
-private val SunsetDark = darkColorScheme(
-    primary = Color(0xFFFF8A5B),
-    onPrimary = Color(0xFF4D1500),
-    primaryContainer = Color(0xFF7C2705),
-    onPrimaryContainer = Color(0xFFFFE0D3),
-    secondary = Color(0xFFFBBF24),
-    onSecondary = Color(0xFF3D2400),
-    secondaryContainer = Color(0xFF633E00),
-    onSecondaryContainer = Color(0xFFFFE8C2),
-    tertiary = Color(0xFF2DD4BF),
-    onTertiary = Color(0xFF003731),
-    tertiaryContainer = Color(0xFF005248),
-    onTertiaryContainer = Color(0xFFC8F7F1),
-    background = Color(0xFF150F0E),
-    onBackground = Color(0xFFF5E9E4),
-    surface = Color(0xFF211716),
-    onSurface = Color(0xFFF5E9E4),
-    surfaceVariant = Color(0xFF312220),
-    onSurfaceVariant = Color(0xFFC4ACA3),
-    outline = Color(0xFF846D65),
-    error = Color(0xFFFFB4AB),
-    onError = Color(0xFF690005),
-    errorContainer = Color(0xFF93000A),
-    onErrorContainer = Color(0xFFFFDAD6),
-)
-
-@Immutable
-data class HeroVisualPalette(
-    val orbGradient: List<Color>,
-    val ringColor: Color,
-    val glowColor: Color,
-    val upAccent: Color,
-    val downAccent: Color,
-)
-
-@Composable
-fun rememberHeroPalette(isRunning: Boolean, isTransitioning: Boolean): HeroVisualPalette {
-    val cs = MaterialTheme.colorScheme
+fun velvetGroupShape(index: Int, count: Int): Shape {
+    val outer = 24.dp
+    val inner = 6.dp
     return when {
-        isTransitioning -> HeroVisualPalette(
-            orbGradient = listOf(cs.secondary, cs.primary),
-            ringColor = cs.secondary,
-            glowColor = cs.secondary.copy(alpha = 0.34f),
-            upAccent = cs.primary,
-            downAccent = cs.tertiary,
+        count <= 1 -> RoundedCornerShape(outer)
+        index <= 0 -> RoundedCornerShape(
+            topStart = outer,
+            topEnd = outer,
+            bottomStart = inner,
+            bottomEnd = inner,
         )
-        isRunning -> HeroVisualPalette(
-            orbGradient = listOf(cs.tertiary, cs.primary),
-            ringColor = cs.tertiary,
-            glowColor = cs.tertiary.copy(alpha = 0.40f),
-            upAccent = cs.primary,
-            downAccent = cs.tertiary,
+        index >= count - 1 -> RoundedCornerShape(
+            topStart = inner,
+            topEnd = inner,
+            bottomStart = outer,
+            bottomEnd = outer,
         )
-        else -> HeroVisualPalette(
-            orbGradient = listOf(cs.primary.copy(alpha = 0.22f), cs.surfaceVariant),
-            ringColor = cs.primary.copy(alpha = 0.55f),
-            glowColor = cs.primary.copy(alpha = 0.16f),
-            upAccent = cs.primary,
-            downAccent = cs.tertiary,
+        else -> RoundedCornerShape(inner)
+    }
+}
+
+@Composable
+fun rememberRimBorder(rimColor: Color = MaterialTheme.velvet.rim): BorderStroke {
+    return remember(rimColor) {
+        BorderStroke(
+            width = 1.dp,
+            brush = Brush.verticalGradient(
+                0.0f to rimColor,
+                0.42f to rimColor.copy(alpha = rimColor.alpha * 0.30f),
+                1.0f to Color.Transparent,
+            ),
         )
     }
 }
 
 @Composable
-fun AmbientAuroraBackground(
-    isRunning: Boolean,
-    isTransitioning: Boolean,
+fun VelvetCard(
     modifier: Modifier = Modifier,
-    content: @Composable BoxScope.() -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    val isDark = cs.background.luminance() < 0.5f
-
-    val targetTop = when {
-        isTransitioning -> cs.secondary
-        isRunning -> cs.tertiary
-        else -> cs.primary
-    }
-    val targetBottom = if (isRunning) cs.primary else cs.secondary
-
-    val topGlow by animateColorAsState(targetTop, tween(600), label = "auroraTop")
-    val bottomGlow by animateColorAsState(targetBottom, tween(600), label = "auroraBottom")
-
-    Box(modifier = modifier.fillMaxSize()) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            drawRect(color = cs.background)
-
-            val topAlpha = if (isDark) {
-                if (isRunning) 0.24f else 0.14f
-            } else {
-                if (isRunning) 0.14f else 0.08f
-            }
-            val topCenter = Offset(size.width * 0.5f, size.height * 0.18f)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(topGlow.copy(alpha = topAlpha), Color.Transparent),
-                    center = topCenter,
-                    radius = size.maxDimension * 0.55f,
-                ),
-                center = topCenter,
-                radius = size.maxDimension * 0.55f,
-            )
-
-            val bottomAlpha = if (isDark) 0.14f else 0.07f
-            val bottomCenter = Offset(size.width * 0.88f, size.height * 0.86f)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(bottomGlow.copy(alpha = bottomAlpha), Color.Transparent),
-                    center = bottomCenter,
-                    radius = size.maxDimension * 0.48f,
-                ),
-                center = bottomCenter,
-                radius = size.maxDimension * 0.48f,
-            )
-
-            // Subtle polar telemetry rings
-            val gridCenter = Offset(size.width * 0.5f, size.height * 0.24f)
-            val ringStroke = Stroke(width = 1.dp.toPx())
-            val gridAlpha = if (isDark) 0.055f else 0.045f
-            for (mult in listOf(0.28f, 0.46f, 0.68f)) {
-                drawCircle(
-                    color = topGlow.copy(alpha = gridAlpha),
-                    radius = size.minDimension * mult,
-                    center = gridCenter,
-                    style = ringStroke,
-                )
-            }
-        }
-        content()
-    }
-}
-
-@Composable
-fun GlassCard(
-    modifier: Modifier = Modifier,
-    accentColor: Color? = null,
-    shape: Shape = RoundedCornerShape(22.dp),
+    containerColor: Color = MaterialTheme.velvet.card,
+    rimColor: Color = MaterialTheme.velvet.rim,
+    shape: Shape = RoundedCornerShape(24.dp),
     contentPadding: PaddingValues = PaddingValues(16.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
-    val isDark = cs.background.luminance() < 0.5f
-    val borderAccent = accentColor ?: cs.primary
-    val containerColor = if (accentColor != null) {
-        accentColor.copy(alpha = if (isDark) 0.13f else 0.09f)
-    } else {
-        cs.surface.copy(alpha = if (isDark) 0.78f else 0.88f)
-    }
-    val borderBrush = Brush.linearGradient(
-        colors = listOf(
-            borderAccent.copy(alpha = if (accentColor != null) 0.46f else if (isDark) 0.28f else 0.20f),
-            cs.outline.copy(alpha = if (isDark) 0.20f else 0.14f),
-            borderAccent.copy(alpha = if (isDark) 0.08f else 0.05f),
-        ),
-    )
-
     Surface(
         modifier = modifier,
         shape = shape,
         color = containerColor,
-        contentColor = cs.onSurface,
-        border = BorderStroke(1.dp, borderBrush),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        border = rememberRimBorder(rimColor),
     ) {
         Column(
             modifier = Modifier.padding(contentPadding),
@@ -458,20 +339,499 @@ fun GlassCard(
     }
 }
 
-private fun schemeFor(palette: String, dark: Boolean): ColorScheme {
-    return when (palette) {
-        "ocean" -> if (dark) OceanDark else OceanLight
-        "emerald" -> if (dark) EmeraldDark else EmeraldLight
-        "amethyst" -> if (dark) AmethystDark else AmethystLight
-        "sunset" -> if (dark) SunsetDark else SunsetLight
-        else -> if (dark) ObsidianDark else ObsidianLight
+@Composable
+fun VelvetGroup(
+    modifier: Modifier = Modifier,
+    spacing: Dp = 3.dp,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(spacing),
+        content = content,
+    )
+}
+
+@Composable
+fun VelvetGroupItem(
+    index: Int,
+    count: Int,
+    modifier: Modifier = Modifier,
+    containerColor: Color = MaterialTheme.velvet.card,
+    onClick: (() -> Unit)? = null,
+    contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val shape = velvetGroupShape(index, count)
+    val rim = if (index == 0) MaterialTheme.velvet.rim else MaterialTheme.velvet.rim.copy(alpha = MaterialTheme.velvet.rim.alpha * 0.55f)
+    if (onClick != null) {
+        Surface(
+            onClick = onClick,
+            modifier = modifier.fillMaxWidth(),
+            shape = shape,
+            color = containerColor,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            border = rememberRimBorder(rim),
+        ) {
+            Column(
+                modifier = Modifier.padding(contentPadding),
+                content = content,
+            )
+        }
+    } else {
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            shape = shape,
+            color = containerColor,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            border = rememberRimBorder(rim),
+        ) {
+            Column(
+                modifier = Modifier.padding(contentPadding),
+                content = content,
+            )
+        }
     }
+}
+
+@Composable
+fun VelvetIconBadge(
+    containerColor: Color = MaterialTheme.velvet.accentSoft,
+    contentColor: Color = MaterialTheme.velvet.accent,
+    size: Dp = 40.dp,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(RoundedCornerShape(13.dp))
+            .background(containerColor),
+        contentAlignment = Alignment.Center,
+    ) {
+        CompositionLocalProvider(LocalContentColor provides contentColor) {
+            content()
+        }
+    }
+}
+
+@Composable
+fun MorphingPowerButton(
+    isRunning: Boolean,
+    isTransitioning: Boolean,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val velvet = MaterialTheme.velvet
+    val haptic = LocalHapticFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    val targetCorner = when {
+        isPressed -> 14.dp
+        isTransitioning -> 22.dp
+        isRunning -> 20.dp
+        else -> 34.dp
+    }
+    val cornerRadius by animateDpAsState(
+        targetValue = targetCorner,
+        animationSpec = spring(
+            dampingRatio = 0.62f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "powerCorner",
+    )
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.92f else 1f,
+        animationSpec = spring(dampingRatio = 0.65f, stiffness = Spring.StiffnessMedium),
+        label = "powerScale",
+    )
+    val containerColor by animateColorAsState(
+        targetValue = when {
+            isTransitioning -> velvet.accent.copy(alpha = 0.78f)
+            isRunning -> velvet.accent
+            else -> velvet.accent
+        },
+        animationSpec = tween(260),
+        label = "powerBg",
+    )
+
+    val shape = RoundedCornerShape(cornerRadius)
+    Box(
+        modifier = modifier
+            .size(66.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(shape)
+            .background(containerColor)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = !isTransitioning,
+                role = Role.Button,
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onClick()
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (isTransitioning) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                strokeWidth = 2.6.dp,
+                color = velvet.onAccent,
+            )
+        } else {
+            Icon(
+                imageVector = if (isRunning) Icons.Rounded.Stop else Icons.Rounded.PowerSettingsNew,
+                contentDescription = contentDescription,
+                tint = velvet.onAccent,
+                modifier = Modifier.size(if (isRunning) 28.dp else 27.dp),
+            )
+        }
+    }
+}
+
+@Composable
+fun ThroughputWaveCanvas(
+    isRunning: Boolean,
+    downHistory: List<Float>,
+    upHistory: List<Float>,
+    modifier: Modifier = Modifier,
+) {
+    val velvet = MaterialTheme.velvet
+    val cs = MaterialTheme.colorScheme
+
+    val phase = if (isRunning) {
+        val transition = rememberInfiniteTransition(label = "velvetWave")
+        val p by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = (2.0 * PI).toFloat(),
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 4200, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "wavePhase",
+        )
+        p
+    } else {
+        0f
+    }
+
+    val beaconPulse = if (isRunning) {
+        val transition = rememberInfiniteTransition(label = "velvetBeacon")
+        val b by transition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1400, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "beaconAlpha",
+        )
+        b
+    } else {
+        0f
+    }
+
+    val primaryColor = velvet.accent
+    val secondaryColor = velvet.liveGreen
+    val idleLineColor = cs.outline.copy(alpha = if (velvet.isDark) 0.34f else 0.28f)
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        if (w <= 4f || h <= 4f) return@Canvas
+
+        val padRight = 10.dp.toPx()
+        val usableW = (w - padRight).coerceAtLeast(1f)
+        val baseLineY = h * 0.84f
+
+        if (!isRunning) {
+            drawLine(
+                color = idleLineColor,
+                start = Offset(0f, baseLineY),
+                end = Offset(usableW, baseLineY),
+                strokeWidth = 1.5.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+            return@Canvas
+        }
+
+        val n = downHistory.size.coerceAtLeast(2)
+        var peakBps = 48f * 1024f
+        for (v in downHistory) if (v > peakBps) peakBps = v
+        for (v in upHistory) if (v > peakBps) peakBps = v
+
+        fun buildWavePoints(series: List<Float>, carrierAmp: Float, phaseShift: Float): List<Offset> {
+            val count = series.size.coerceAtLeast(2)
+            val stepX = usableW / (count - 1).toFloat()
+            val maxAmplitude = h * 0.68f
+            return List(count) { idx ->
+                val x = idx * stepX
+                val raw = series[idx].coerceAtLeast(0f)
+                // Soft sqrt curve makes both light chat traffic and heavy media downloads look balanced
+                val norm = kotlin.math.sqrt((raw / max(peakBps, 1f)).coerceIn(0f, 1f))
+                val carrier = (sin(phase + phaseShift + idx * 0.36f) * 0.5f + 0.5f) * carrierAmp
+                val lift = (norm * maxAmplitude + carrier * h).coerceIn(2f, h * 0.78f)
+                Offset(x, (baseLineY - lift).coerceIn(4f, baseLineY))
+            }
+        }
+
+        fun buildSmoothPath(points: List<Offset>): Path {
+            val path = Path()
+            if (points.isEmpty()) return path
+            path.moveTo(points[0].x, points[0].y)
+            for (i in 0 until points.size - 1) {
+                val p0 = points[i]
+                val p1 = points[i + 1]
+                val midX = (p0.x + p1.x) * 0.5f
+                path.cubicTo(midX, p0.y, midX, p1.y, p1.x, p1.y)
+            }
+            return path
+        }
+
+        // Secondary upload stream (subtle emerald undertone)
+        if (upHistory.size >= 2) {
+            val upPoints = buildWavePoints(upHistory, carrierAmp = 0.045f, phaseShift = 1.7f)
+            val upStrokePath = buildSmoothPath(upPoints)
+            drawPath(
+                path = upStrokePath,
+                color = secondaryColor.copy(alpha = if (velvet.isDark) 0.42f else 0.34f),
+                style = Stroke(
+                    width = 1.6.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                ),
+            )
+        }
+
+        // Primary download stream (sculpted sapphire curve + soft gradient fill + live tip beacon)
+        val downPoints = buildWavePoints(
+            series = if (downHistory.size >= 2) downHistory else List(n) { 0f },
+            carrierAmp = 0.085f,
+            phaseShift = 0f,
+        )
+        val strokePath = buildSmoothPath(downPoints)
+        val fillPath = Path().apply {
+            addPath(strokePath)
+            lineTo(downPoints.last().x, h)
+            lineTo(downPoints.first().x, h)
+            close()
+        }
+
+        drawPath(
+            path = fillPath,
+            brush = Brush.verticalGradient(
+                0.0f to primaryColor.copy(alpha = if (velvet.isDark) 0.32f else 0.22f),
+                0.78f to primaryColor.copy(alpha = if (velvet.isDark) 0.06f else 0.04f),
+                1.0f to Color.Transparent,
+                startY = 0f,
+                endY = h,
+            ),
+        )
+        drawPath(
+            path = strokePath,
+            color = primaryColor,
+            style = Stroke(
+                width = 2.4.dp.toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round,
+            ),
+        )
+
+        val tip = downPoints.last()
+        drawCircle(
+            color = primaryColor.copy(alpha = 0.28f * beaconPulse),
+            radius = 9.dp.toPx() * (0.85f + 0.3f * beaconPulse),
+            center = tip,
+        )
+        drawCircle(
+            color = primaryColor,
+            radius = 3.8.dp.toPx(),
+            center = tip,
+        )
+    }
+}
+
+@Composable
+fun LiveRouteStrip(
+    clientLabel: String,
+    localEndpoint: String,
+    upstreamLabel: String,
+    isRunning: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val velvet = MaterialTheme.velvet
+    val cs = MaterialTheme.colorScheme
+
+    val travelProgress = if (isRunning) {
+        val transition = rememberInfiniteTransition(label = "routePacket")
+        val p by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 2200, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "packetProgress",
+        )
+        p
+    } else {
+        0f
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = if (isRunning) {
+            cs.background.copy(alpha = if (velvet.isDark) 0.34f else 0.55f)
+        } else {
+            velvet.cardSub.copy(alpha = if (velvet.isDark) 0.65f else 0.72f)
+        },
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 11.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            RouteNodeTag(
+                text = clientLabel,
+                active = isRunning,
+                accent = false,
+            )
+            RouteConnectorWire(
+                progress = if (isRunning) (travelProgress * 2f).coerceIn(0f, 1f) else -1f,
+                active = isRunning,
+                modifier = Modifier.weight(1f),
+            )
+            RouteNodeTag(
+                text = localEndpoint,
+                active = isRunning,
+                accent = false,
+                mono = true,
+            )
+            RouteConnectorWire(
+                progress = if (isRunning) ((travelProgress - 0.5f) * 2f).coerceIn(0f, 1f) else -1f,
+                active = isRunning,
+                modifier = Modifier.weight(1f),
+            )
+            RouteNodeTag(
+                text = upstreamLabel,
+                active = isRunning,
+                accent = isRunning,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RouteNodeTag(
+    text: String,
+    active: Boolean,
+    accent: Boolean,
+    mono: Boolean = false,
+) {
+    val velvet = MaterialTheme.velvet
+    val cs = MaterialTheme.colorScheme
+    val bg = when {
+        accent && active -> velvet.accentSoft
+        active -> velvet.card.copy(alpha = if (velvet.isDark) 0.72f else 0.88f)
+        else -> Color.Transparent
+    }
+    val fg = when {
+        accent && active -> velvet.accent
+        active -> cs.onSurface
+        else -> cs.onSurfaceVariant
+    }
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(bg)
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+    ) {
+        androidx.compose.material3.Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = if (mono) FontFamily.Monospace else FontFamily.SansSerif,
+                fontWeight = if (accent) FontWeight.Bold else FontWeight.Medium,
+            ),
+            color = fg,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun RouteConnectorWire(
+    progress: Float,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val velvet = MaterialTheme.velvet
+    val cs = MaterialTheme.colorScheme
+    val lineColor = if (active) {
+        velvet.accent.copy(alpha = 0.34f)
+    } else {
+        cs.outline.copy(alpha = 0.28f)
+    }
+    val dotColor = velvet.liveGreen
+
+    Canvas(modifier = modifier.height(10.dp)) {
+        val midY = size.height * 0.5f
+        drawLine(
+            color = lineColor,
+            start = Offset(0f, midY),
+            end = Offset(size.width, midY),
+            strokeWidth = 1.5.dp.toPx(),
+            cap = StrokeCap.Round,
+        )
+        if (active && progress in 0.02f..0.98f) {
+            val x = size.width * progress
+            drawCircle(
+                color = dotColor.copy(alpha = 0.30f),
+                radius = 5.dp.toPx(),
+                center = Offset(x, midY),
+            )
+            drawCircle(
+                color = dotColor,
+                radius = 2.4.dp.toPx(),
+                center = Offset(x, midY),
+            )
+        }
+    }
+}
+
+@Composable
+fun LiveStatusDot(
+    isRunning: Boolean,
+    isTransitioning: Boolean,
+    size: Dp = 8.dp,
+) {
+    val velvet = MaterialTheme.velvet
+    val cs = MaterialTheme.colorScheme
+    val dotColor = when {
+        isTransitioning -> velvet.warning
+        isRunning -> velvet.liveGreen
+        else -> cs.onSurfaceVariant.copy(alpha = 0.55f)
+    }
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(dotColor),
+    )
 }
 
 @Composable
 fun TgWsProxyTheme(
     themeMode: String,
-    colorPalette: String,
     dynamicColors: Boolean,
     content: @Composable () -> Unit,
 ) {
@@ -483,10 +843,31 @@ fun TgWsProxyTheme(
     }
 
     val context = LocalContext.current
-    val colorScheme = if (dynamicColors && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    val useDynamic = dynamicColors && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    val colorScheme = if (useDynamic) {
         if (useDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     } else {
-        schemeFor(colorPalette, useDark)
+        if (useDark) VelvetDarkScheme else VelvetLightScheme
+    }
+
+    val velvetColors = remember(useDark, useDynamic, colorScheme) {
+        if (!useDynamic) {
+            if (useDark) DarkVelvetColors else LightVelvetColors
+        } else {
+            val base = if (useDark) DarkVelvetColors else LightVelvetColors
+            base.copy(
+                bg = colorScheme.background,
+                card = colorScheme.surfaceContainer,
+                cardSub = colorScheme.surfaceContainerHigh,
+                heroActive = colorScheme.primaryContainer,
+                heroActiveRim = colorScheme.primary.copy(alpha = if (useDark) 0.24f else 0.18f),
+                accent = colorScheme.primary,
+                onAccent = colorScheme.onPrimary,
+                accentSoft = colorScheme.primary.copy(alpha = if (useDark) 0.16f else 0.12f),
+                consoleBg = colorScheme.surfaceContainerLowest,
+            )
+        }
     }
 
     val view = LocalView.current
@@ -499,9 +880,14 @@ fun TgWsProxyTheme(
         }
     }
 
-    MaterialTheme(colorScheme = colorScheme) {
-        CompositionLocalProvider(LocalContentColor provides colorScheme.onBackground) {
-            content()
+    CompositionLocalProvider(LocalVelvetColors provides velvetColors) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = VelvetTypography,
+        ) {
+            CompositionLocalProvider(LocalContentColor provides colorScheme.onBackground) {
+                content()
+            }
         }
     }
 }

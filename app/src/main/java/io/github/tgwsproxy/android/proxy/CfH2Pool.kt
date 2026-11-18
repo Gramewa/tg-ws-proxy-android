@@ -792,6 +792,18 @@ class CfH2Pool(
         }
     }
 
+    fun onNetworkChanged() {
+        val snapshot = synchronized(lock) {
+            failedUntilMs.clear()
+            setupRetryAfterMs.clear()
+            lanes.values.toList()
+        }
+        for (lane in snapshot) {
+            lane.failedUntilMs = 0L
+            runCatching { lane.client.connectionPool.evictAll() }
+        }
+    }
+
     fun close() {
         closed = true
         val toClose = synchronized(lock) {

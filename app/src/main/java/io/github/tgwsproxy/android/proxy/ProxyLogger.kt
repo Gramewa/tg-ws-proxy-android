@@ -3,9 +3,10 @@ package io.github.tgwsproxy.android.proxy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.ArrayDeque
-import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -14,19 +15,26 @@ enum class LogLevel {
 }
 
 data class LogEntry(
+    val id: Long,
     val timestampMs: Long,
     val level: LogLevel,
     val message: String,
+    val timeText: String = TIME_FORMATTER.format(Instant.ofEpochMilli(timestampMs)),
 ) {
     fun formatLine(): String {
-        val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(timestampMs))
         val tag = when (level) {
             LogLevel.DEBUG -> "DEBUG"
             LogLevel.INFO -> "INFO "
             LogLevel.WARN -> "WARN "
             LogLevel.ERROR -> "ERROR"
         }
-        return "$timeFmt  $tag  $message"
+        return "$timeText  $tag  $message"
+    }
+
+    companion object {
+        private val TIME_FORMATTER: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("HH:mm:ss", Locale.US)
+                .withZone(ZoneId.systemDefault())
     }
 }
 
@@ -72,6 +80,7 @@ object ProxyLogger {
     val verboseEnabled = AtomicBoolean(false)
 
     private val lock = Any()
+    private var nextId = 1L
     private val buffer = ArrayDeque<LogEntry>(MAX_ENTRIES)
     private val _entries = MutableStateFlow<List<LogEntry>>(emptyList())
     val entries: StateFlow<List<LogEntry>> = _entries.asStateFlow()
@@ -115,13 +124,19 @@ object ProxyLogger {
 
     private fun log(level: LogLevel, rawMessage: String) {
         val censored = DomainCensor.censor(rawMessage)
-        val entry = LogEntry(System.currentTimeMillis(), level, censored)
+        val now = System.currentTimeMillis()
         synchronized(lock) {
+            val entry = LogEntry(
+                id = nextId++,
+                timestampMs = now,
+                level = level,
+                message = censored,
+            )
             if (buffer.size >= MAX_ENTRIES) {
                 buffer.removeFirst()
             }
             buffer.addLast(entry)
-            _entries.value = buffer.toList()
+            _entries.value = ArrayList(buffer)
         }
         val verbose = verboseEnabled.get()
         try {

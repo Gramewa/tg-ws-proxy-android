@@ -360,4 +360,37 @@ class ProxyProtocolTest {
         assertEquals(1, out.size)
         assertEquals(oversizedPlain.size, out[0].size)
     }
+
+    @Test
+    fun settingsJsonExportImportAndDiffHelpersRoundTrip() {
+        val original = io.github.tgwsproxy.android.data.AppSettings(
+            host = "127.0.0.1",
+            port = 2443,
+            secret = "0123456789abcdef0123456789abcdef",
+            fakeTlsDomain = "example.com",
+            disableSecure = true,
+            bufferKb = 512,
+            poolSize = 6,
+            language = "en",
+            themeMode = "dark",
+        )
+        val json = original.toExportJson()
+        val targetBase = io.github.tgwsproxy.android.data.AppSettings(language = "ru", themeMode = "light")
+        val restored = targetBase.applyImportedJson(json)
+        assertNotNull(restored)
+        restored!!
+        assertTrue(restored.hasSameNetworkConfigAs(original))
+        assertTrue(restored.hasSameClientLinkAs(original))
+        // UI preferences stay untouched on target device
+        assertEquals("ru", restored.language)
+        assertEquals("light", restored.themeMode)
+
+        val changedSecret = restored.copy(secret = "fedcba9876543210fedcba9876543210")
+        assertFalse(changedSecret.hasSameClientLinkAs(original))
+        assertFalse(changedSecret.hasSameNetworkConfigAs(original))
+
+        assertNull(targetBase.applyImportedJson("""{"host":"999.999.1.1"}"""))
+        assertNull(targetBase.applyImportedJson("""{"port":70000}"""))
+        assertNull(targetBase.applyImportedJson("not-json"))
+    }
 }

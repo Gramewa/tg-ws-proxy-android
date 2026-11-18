@@ -8,6 +8,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -61,11 +63,14 @@ class ProxyForegroundService : Service() {
     private var notificationJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var activeNetworkHandle: Long? = null
 
     override fun onCreate() {
         super.onCreate()
         ProxyController.init(applicationContext)
         createNotificationChannel()
+        registerNetworkWatcher()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -79,7 +84,7 @@ class ProxyForegroundService : Service() {
             return START_NOT_STICKY
         }
 
-        startForegroundWithNotification(buildNotification())
+        startForegroundWithNotification(buildNotificationPayload().second)
 
         serviceScope.launch {
             val res = ProxyController.startProxy()
@@ -93,6 +98,35 @@ class ProxyForegroundService : Service() {
             startNotificationUpdater()
         }
         return START_STICKY
+    }
+
+    private fun registerNetworkWatcher() {
+        if (networkCallback != null) return
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val handle = network.networkHandle
+                val previous = activeNetworkHandle
+                activeNetworkHandle = handle
+                if (previous != null && previous != handle) {
+                    ProxyController.onNetworkChanged()
+                }
+            }
+        }
+        runCatching {
+            cm.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        }.onFailure { exc ->
+            ProxyLogger.w("NetworkCallback registration skipped: ${exc.message}")
+        }
+    }
+
+    private fun unregisterNetworkWatcher() {
+        val cb = networkCallback ?: return
+        networkCallback = null
+        activeNetworkHandle = null
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        runCatching { cm.unregisterNetworkCallback(cb) }
     }
 
     private fun startForegroundWithNotification(notification: Notification) {
@@ -110,7 +144,9 @@ class ProxyForegroundService : Service() {
     private fun startNotificationUpdater() {
         if (notificationJob?.isActive == true) return
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         notificationJob = serviceScope.launch {
+            var lastDigest = ""
             while (isActive) {
                 if (!ProxyController.isRunning.value && !ProxyController.isTransitioning.value) {
                     releaseLocks()
@@ -119,27 +155,34 @@ class ProxyForegroundService : Service() {
                     break
                 }
                 updateLocks(ProxyController.settings.value.keepWakeLock)
-                manager.notify(NOTIFICATION_ID, buildNotification())
-                delay(2000L)
+                if (powerManager.isInteractive || lastDigest.isEmpty()) {
+                    val (digest, notification) = buildNotificationPayload()
+                    if (digest != lastDigest) {
+                        lastDigest = digest
+                        manager.notify(NOTIFICATION_ID, notification)
+                    }
+                }
+                delay(2500L)
             }
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotificationPayload(): Pair<String, Notification> {
         val cfg = ProxyController.currentConfig.value ?: ProxyController.settings.value.toProxyConfig()
         val stats = ProxyController.statsSnapshot.value
         val isRu = ProxyController.settings.value.language == "ru"
 
         val title = if (cfg.disableSecure) {
-            if (isRu) "TG WS Proxy • HTTP :80" else "TG WS Proxy • HTTP :80"
+            "TG WS Proxy · HTTP :80"
         } else {
-            "TG WS Proxy • ${cfg.host}:${cfg.port}"
+            "TG WS Proxy · ${cfg.host}:${cfg.port}"
         }
         val content = if (isRu) {
-            "↑ ${humanBytes(stats.bytesUp)}  ↓ ${humanBytes(stats.bytesDown)}  • Активных: ${stats.connectionsActive}"
+            "↓ ${humanBytes(stats.bytesDown)}  ↑ ${humanBytes(stats.bytesUp)} · Активных: ${stats.connectionsActive}"
         } else {
-            "↑ ${humanBytes(stats.bytesUp)}  ↓ ${humanBytes(stats.bytesDown)}  • Active: ${stats.connectionsActive}"
+            "↓ ${humanBytes(stats.bytesDown)}  ↑ ${humanBytes(stats.bytesUp)} · Active: ${stats.connectionsActive}"
         }
+        val digest = "$isRu|$title|$content"
 
         val openAppIntent = PendingIntent.getActivity(
             this,
@@ -167,12 +210,13 @@ class ProxyForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(content)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setSilent(true)
             .setContentIntent(openAppIntent)
             .addAction(
                 R.drawable.ic_notification,
@@ -185,6 +229,8 @@ class ProxyForegroundService : Service() {
                 stopIntent,
             )
             .build()
+
+        return digest to notification
     }
 
     private fun createNotificationChannel() {
@@ -242,6 +288,7 @@ class ProxyForegroundService : Service() {
 
     override fun onDestroy() {
         notificationJob?.cancel()
+        unregisterNetworkWatcher()
         releaseLocks()
         serviceScope.cancel()
         super.onDestroy()

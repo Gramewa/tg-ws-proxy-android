@@ -1,6 +1,7 @@
 package io.github.tgwsproxy.android.service
 
 import android.content.Context
+import androidx.compose.runtime.Immutable
 import io.github.tgwsproxy.android.data.AppSettings
 import io.github.tgwsproxy.android.data.SettingsRepository
 import io.github.tgwsproxy.android.proxy.ProxyConfig
@@ -21,6 +22,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+
+@Immutable
+data class ThroughputTelemetry(
+    val downBps: Long = 0L,
+    val upBps: Long = 0L,
+    val downHistory: List<Float> = EmptyWaveHistory,
+    val upHistory: List<Float> = EmptyWaveHistory,
+) {
+    companion object {
+        const val HISTORY_POINTS = 28
+        val EmptyWaveHistory: List<Float> = List(HISTORY_POINTS) { 0f }
+    }
+}
 
 object ProxyController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -45,6 +59,9 @@ object ProxyController {
     private val _statsSnapshot = MutableStateFlow(StatsSnapshot())
     val statsSnapshot: StateFlow<StatsSnapshot> = _statsSnapshot.asStateFlow()
 
+    private val _telemetry = MutableStateFlow(ThroughputTelemetry())
+    val telemetry: StateFlow<ThroughputTelemetry> = _telemetry.asStateFlow()
+
     private val _uptimeSeconds = MutableStateFlow(0L)
     val uptimeSeconds: StateFlow<Long> = _uptimeSeconds.asStateFlow()
 
@@ -53,6 +70,9 @@ object ProxyController {
 
     private var tickerJob: Job? = null
     private var startedAtMs: Long = 0L
+
+    @Volatile
+    private var lastNetworkChangeMs: Long = 0L
 
     fun init(context: Context) {
         if (::repository.isInitialized) return
@@ -79,6 +99,8 @@ object ProxyController {
             withContext(Dispatchers.IO) {
                 server.start(cfg)
             }
+            repository.setWasRunning(true)
+            _settings.value = current.copy(wasRunning = true)
             _currentConfig.value = cfg
             _isRunning.value = true
             startedAtMs = System.currentTimeMillis()
@@ -97,7 +119,7 @@ object ProxyController {
     }
 
     suspend fun stopProxy() = opMutex.withLock {
-        stopInternal()
+        stopInternal(persistStopped = true)
     }
 
     fun stopAsync() {
@@ -108,13 +130,15 @@ object ProxyController {
         _isTransitioning.value = true
         _lastError.value = null
         try {
-            stopInternal()
+            stopInternal(persistStopped = false)
             val current = repository.ensureInitialized()
             _settings.value = current
             val cfg = current.toProxyConfig()
             withContext(Dispatchers.IO) {
                 server.start(cfg)
             }
+            repository.setWasRunning(true)
+            _settings.value = current.copy(wasRunning = true)
             _currentConfig.value = cfg
             _isRunning.value = true
             startedAtMs = System.currentTimeMillis()
@@ -132,6 +156,19 @@ object ProxyController {
         }
     }
 
+    fun onNetworkChanged() {
+        if (!_isRunning.value) return
+        val now = System.currentTimeMillis()
+        if (now - lastNetworkChangeMs < 1500L) return
+        lastNetworkChangeMs = now
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                ProxyLogger.i("Network changed, refreshing upstream pools")
+                server.onNetworkChanged()
+            }
+        }
+    }
+
     suspend fun updateSettings(
         restartIfRunning: Boolean = true,
         transform: (AppSettings) -> AppSettings,
@@ -145,9 +182,10 @@ object ProxyController {
     }
 
     suspend fun saveSettings(settings: AppSettings, restartIfRunning: Boolean = true) {
-        repository.save(settings)
-        _settings.value = settings
-        ProxyLogger.setVerbose(settings.verboseLogging)
+        val toSave = settings.copy(wasRunning = _isRunning.value)
+        repository.save(toSave)
+        _settings.value = toSave
+        ProxyLogger.setVerbose(toSave.verboseLogging)
         if (restartIfRunning && _isRunning.value) {
             restartProxy()
         }
@@ -177,14 +215,39 @@ object ProxyController {
         }
     }
 
-    fun cyclePaletteAsync() {
-        val order = listOf("obsidian", "ocean", "emerald", "amethyst", "sunset")
+    fun setThemeModeAsync(mode: String) {
         scope.launch {
-            updateSettings(restartIfRunning = false) { cur ->
-                val idx = order.indexOf(cur.colorPalette)
-                val next = order[(idx + 1) % order.size]
-                cur.copy(colorPalette = next, dynamicColors = false)
-            }
+            updateSettings(restartIfRunning = false) { it.copy(themeMode = mode) }
+        }
+    }
+
+    fun setDynamicColorsAsync(enabled: Boolean) {
+        scope.launch {
+            updateSettings(restartIfRunning = false) { it.copy(dynamicColors = enabled) }
+        }
+    }
+
+    fun setLanguageAsync(lang: String) {
+        scope.launch {
+            updateSettings(restartIfRunning = false) { it.copy(language = lang) }
+        }
+    }
+
+    fun setAutoStartAsync(enabled: Boolean) {
+        scope.launch {
+            updateSettings(restartIfRunning = false) { it.copy(autoStartOnBoot = enabled) }
+        }
+    }
+
+    fun setKeepWakeLockAsync(enabled: Boolean) {
+        scope.launch {
+            updateSettings(restartIfRunning = false) { it.copy(keepWakeLock = enabled) }
+        }
+    }
+
+    fun setCheckUpdatesOnStartupAsync(enabled: Boolean) {
+        scope.launch {
+            updateSettings(restartIfRunning = false) { it.copy(checkUpdatesOnStartup = enabled) }
         }
     }
 
@@ -222,24 +285,64 @@ object ProxyController {
         _lastError.value = null
     }
 
-    private suspend fun stopInternal() {
+    private suspend fun stopInternal(persistStopped: Boolean) {
         tickerJob?.cancel()
         tickerJob = null
         withContext(Dispatchers.IO) {
             server.stop()
         }
+        if (persistStopped && ::repository.isInitialized) {
+            runCatching { repository.setWasRunning(false) }
+            _settings.value = _settings.value.copy(wasRunning = false)
+        }
         _isRunning.value = false
         _currentConfig.value = null
         _uptimeSeconds.value = 0L
         _statsSnapshot.value = ProxyStats.snapshot()
+        _telemetry.value = ThroughputTelemetry()
     }
 
     private fun startTicker() {
         tickerJob?.cancel()
         tickerJob = scope.launch {
+            val initialSnap = ProxyStats.snapshot()
+            var prevDown = initialSnap.bytesDown
+            var prevUp = initialSnap.bytesUp
+            var prevTimeMs = System.currentTimeMillis()
+            val downBuf = ArrayDeque<Float>(ThroughputTelemetry.HISTORY_POINTS).apply {
+                repeat(ThroughputTelemetry.HISTORY_POINTS) { addLast(0f) }
+            }
+            val upBuf = ArrayDeque<Float>(ThroughputTelemetry.HISTORY_POINTS).apply {
+                repeat(ThroughputTelemetry.HISTORY_POINTS) { addLast(0f) }
+            }
+
             while (isActive && _isRunning.value) {
-                _statsSnapshot.value = ProxyStats.snapshot()
-                _uptimeSeconds.value = ((System.currentTimeMillis() - startedAtMs) / 1000L).coerceAtLeast(0L)
+                val nowMs = System.currentTimeMillis()
+                val snap = ProxyStats.snapshot()
+                _statsSnapshot.value = snap
+                _uptimeSeconds.value = ((nowMs - startedAtMs) / 1000L).coerceAtLeast(0L)
+
+                val dtSec = ((nowMs - prevTimeMs).coerceAtLeast(250L)) / 1000f
+                val downDelta = (snap.bytesDown - prevDown).coerceAtLeast(0L)
+                val upDelta = (snap.bytesUp - prevUp).coerceAtLeast(0L)
+                val downRate = (downDelta / dtSec).toLong()
+                val upRate = (upDelta / dtSec).toLong()
+
+                prevDown = snap.bytesDown
+                prevUp = snap.bytesUp
+                prevTimeMs = nowMs
+
+                if (downBuf.size >= ThroughputTelemetry.HISTORY_POINTS) downBuf.removeFirst()
+                downBuf.addLast(downRate.toFloat())
+                if (upBuf.size >= ThroughputTelemetry.HISTORY_POINTS) upBuf.removeFirst()
+                upBuf.addLast(upRate.toFloat())
+
+                _telemetry.value = ThroughputTelemetry(
+                    downBps = downRate,
+                    upBps = upRate,
+                    downHistory = downBuf.toList(),
+                    upHistory = upBuf.toList(),
+                )
                 delay(1000L)
             }
         }
