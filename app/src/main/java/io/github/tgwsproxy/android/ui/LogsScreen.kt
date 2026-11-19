@@ -66,6 +66,10 @@ fun LogsScreen(strings: AppStrings) {
     val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
 
+    LaunchedEffect(Unit) {
+        ProxyLogger.flushToUi()
+    }
+
     var showDebug by remember { mutableStateOf(true) }
     var showInfo by remember { mutableStateOf(true) }
     var showWarn by remember { mutableStateOf(true) }

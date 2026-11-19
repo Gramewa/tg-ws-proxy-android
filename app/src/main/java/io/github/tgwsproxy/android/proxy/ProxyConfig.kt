@@ -2,9 +2,10 @@ package io.github.tgwsproxy.android.proxy
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -35,6 +36,12 @@ data class ProxyConfig(
     val cfproxyWorkerDomains: List<String> = emptyList(),
     val cfproxyH2Media: Boolean = true,
     val disableSecure: Boolean = false,
+    val autoPort80Fallback: Boolean = true,
+    val frontingSni: String = DEFAULT_FRONTING_SNI,
+    val dohProvider: String = DnsResolver.DOH_SYSTEM,
+    val cfCleanIp: String = "",
+    val ipPreference: String = DnsResolver.IP_PREF_AUTO,
+    val cachedCfDomains: List<String> = emptyList(),
     val fakeTlsDomain: String = "",
     val proxyProtocol: Boolean = false,
     val forceTestDc: Boolean = false,
@@ -42,14 +49,29 @@ data class ProxyConfig(
 ) {
     val h2Enabled: Boolean
         get() = cfproxyH2Media && fallbackCfproxy && !disableSecure && !forceTestDc
+
+    val frontingSniList: List<String>
+        get() = normalizeDomainPool(coerceDomainList(frontingSni))
+            .ifEmpty { listOf(DEFAULT_FRONTING_SNI) }
+
+    val effectiveCfCleanIp: String
+        get() = cfCleanIp.trim().let { if (DnsResolver.isValidIpAddress(it)) it else "" }
 }
+
+const val DEFAULT_FRONTING_SNI = "sprinthost.ru"
 
 const val CFPROXY_DOMAINS_URL =
     "https://raw.githubusercontent.com/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt"
 private const val GITHUB_RAW_HOST = "raw.githubusercontent.com"
-private const val GITHUB_RAW_PINNED_IP = "185.199.109.133"
+private val GITHUB_RAW_PINNED_IPS = listOf(
+    "185.199.108.133",
+    "185.199.109.133",
+    "185.199.110.133",
+    "185.199.111.133",
+)
 private const val CFPROXY_MIN_VALID_DOMAINS = 3
 private const val CFPROXY_REFRESH_INTERVAL_MS = 3_600_000L
+private val CFPROXY_RETRY_BACKOFFS_MS = longArrayOf(30_000L, 120_000L, 600_000L, CFPROXY_REFRESH_INTERVAL_MS)
 private const val MAX_DOMAIN_LIST_BYTES = 64 * 1024
 
 const val WS_PATH = "/apiws"
@@ -249,34 +271,78 @@ class CfDomainRefresher(
 ) {
     private var refreshJob: Job? = null
     private val random = SecureRandom()
+    private val wakeSignal = Channel<Unit>(Channel.CONFLATED)
 
-    fun start(scope: CoroutineScope, userDomains: List<String>) {
+    @Volatile private var autoMode: Boolean = false
+    @Volatile private var lastSuccessMs: Long = 0L
+
+    fun start(
+        scope: CoroutineScope,
+        userDomains: List<String>,
+        cachedDomains: List<String> = emptyList(),
+        onDomainsPersisted: (List<String>) -> Unit = {},
+    ) {
         stop()
         if (userDomains.isNotEmpty()) {
+            autoMode = false
             balancer.updateDomainsList(userDomains)
             return
         }
-        balancer.updateDomainsList(CFPROXY_DEFAULT_DOMAINS)
+        autoMode = true
+        lastSuccessMs = 0L
+        val cachedValid = normalizeDomainPool(cachedDomains)
+        val initialPool = if (cachedValid.size >= CFPROXY_MIN_VALID_DOMAINS) {
+            ProxyLogger.d("Seeded CF proxy domain pool from local cache (${cachedValid.size} domains)")
+            cachedValid
+        } else {
+            CFPROXY_DEFAULT_DOMAINS
+        }
+        balancer.updateDomainsList(initialPool)
+        // Drain any stale wakeup signal
+        while (wakeSignal.tryReceive().isSuccess) {}
+
         refreshJob = scope.launch {
+            var failures = 0
             while (isActive) {
-                refreshOnce()
-                delay(CFPROXY_REFRESH_INTERVAL_MS)
+                val ok = refreshOnce(onDomainsPersisted)
+                val waitMs = if (ok) {
+                    failures = 0
+                    lastSuccessMs = System.currentTimeMillis()
+                    CFPROXY_REFRESH_INTERVAL_MS
+                } else {
+                    val idx = failures.coerceAtMost(CFPROXY_RETRY_BACKOFFS_MS.lastIndex)
+                    failures++
+                    CFPROXY_RETRY_BACKOFFS_MS[idx]
+                }
+                withTimeoutOrNull(waitMs) {
+                    wakeSignal.receive()
+                }
             }
         }
     }
 
+    fun triggerRefreshIfStale() {
+        if (!autoMode || refreshJob?.isActive != true) return
+        val now = System.currentTimeMillis()
+        if (lastSuccessMs == 0L || now - lastSuccessMs >= 600_000L) {
+            wakeSignal.trySend(Unit)
+        }
+    }
+
     fun stop() {
+        autoMode = false
         refreshJob?.cancel()
         refreshJob = null
     }
 
-    private fun refreshOnce() {
+    private fun refreshOnce(onDomainsPersisted: (List<String>) -> Unit): Boolean {
         val fetched = fetchCfProxyDomainList()
         val pool = normalizeDomainPool(fetched)
         if (pool.size >= CFPROXY_MIN_VALID_DOMAINS) {
             balancer.updateDomainsList(pool)
+            runCatching { onDomainsPersisted(pool) }
             ProxyLogger.i("CF proxy domain pool updated from GitHub (${pool.size} domains)")
-            return
+            return true
         }
         if (fetched.isNotEmpty()) {
             ProxyLogger.w(
@@ -287,6 +353,7 @@ class CfDomainRefresher(
         } else {
             ProxyLogger.w("CF proxy domain refresh failed or empty response; keeping current domain pool")
         }
+        return false
     }
 
     private fun fetchCfProxyDomainList(): List<String> {
@@ -297,20 +364,28 @@ class CfDomainRefresher(
         val queryPath = "/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt?$suffix"
         val fullUrl = "$CFPROXY_DOMAINS_URL?$suffix"
 
-        val body = tryFetchViaPinnedIp(queryPath) ?: tryFetchViaStandardHttps(fullUrl) ?: return emptyList()
+        val body = tryFetchViaPinnedIps(queryPath) ?: tryFetchViaStandardHttps(fullUrl) ?: return emptyList()
         return body.lines()
             .map { it.trim() }
             .filter { it.isNotEmpty() && !it.startsWith('#') }
             .map(::decodeCfDomain)
     }
 
-    private fun tryFetchViaPinnedIp(path: String): String? {
+    private fun tryFetchViaPinnedIps(path: String): String? {
+        for (pinnedIp in GITHUB_RAW_PINNED_IPS.shuffled(random)) {
+            val body = tryFetchViaSinglePinnedIp(pinnedIp, path)
+            if (body != null) return body
+        }
+        return null
+    }
+
+    private fun tryFetchViaSinglePinnedIp(pinnedIp: String, path: String): String? {
         var rawSocket: Socket? = null
         var sslSocket: SSLSocket? = null
         return try {
             rawSocket = Socket()
-            rawSocket.connect(InetSocketAddress(GITHUB_RAW_PINNED_IP, 443), 10_000)
-            rawSocket.soTimeout = 10_000
+            rawSocket.connect(InetSocketAddress(pinnedIp, 443), 6_000)
+            rawSocket.soTimeout = 8_000
             val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
             sslSocket = factory.createSocket(rawSocket, GITHUB_RAW_HOST, 443, true) as SSLSocket
             val params = sslSocket.sslParameters
@@ -413,8 +488,8 @@ class CfDomainRefresher(
             val url = URL(fullUrl)
             if (!url.protocol.equals("https", ignoreCase = true)) return null
             conn = (url.openConnection() as? HttpsURLConnection)?.apply {
-                connectTimeout = 10_000
-                readTimeout = 10_000
+                connectTimeout = 8_000
+                readTimeout = 8_000
                 instanceFollowRedirects = false
                 hostnameVerifier = HttpsURLConnection.getDefaultHostnameVerifier()
                 setRequestProperty("User-Agent", "tg-ws-proxy")

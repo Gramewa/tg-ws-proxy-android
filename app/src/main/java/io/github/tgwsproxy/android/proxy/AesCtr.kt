@@ -1,53 +1,44 @@
 package io.github.tgwsproxy.android.proxy
 
-import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Deterministic streaming AES-CTR implemented over AES/ECB/NoPadding.
- * Guarantees 1-byte and arbitrary-size reads/writes advance the 128-bit counter
- * identically to Python cryptography / OpenSSL EVP_EncryptUpdate.
+ * Hardware-accelerated streaming AES-CTR using JCA AES/CTR/NoPadding.
+ * Handles arbitrary byte-granular reads/writes while advancing the 128-bit counter
+ * identically to OpenSSL EVP_EncryptUpdate (Conscrypt/BoringSSL on Android, SunJCE on JVM).
  */
 class AesCtr(key: ByteArray, iv: ByteArray) {
-    private val ecb: Cipher
-    private val counter: ByteArray
-    private val keystream = ByteArray(16)
-    private var offset = 16
+    private val cipher: Cipher
 
     init {
         require(key.size == 16 || key.size == 24 || key.size == 32) {
             "AES key must be 16, 24, or 32 bytes"
         }
         require(iv.size == 16) { "CTR IV must be 16 bytes" }
-        ecb = Cipher.getInstance("AES/ECB/NoPadding").apply {
-            init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"))
+        cipher = Cipher.getInstance("AES/CTR/NoPadding").apply {
+            init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
         }
-        counter = iv.copyOf()
     }
 
     fun update(data: ByteArray, off: Int = 0, len: Int = data.size - off): ByteArray {
         if (len <= 0) return ByteArray(0)
         val out = ByteArray(len)
-        for (i in 0 until len) {
-            if (offset == 16) {
-                ecb.doFinal(counter, 0, 16, keystream, 0)
-                incrementCounter()
-                offset = 0
-            }
-            out[i] = (data[off + i].toInt() xor keystream[offset++].toInt()).toByte()
-        }
+        cipher.update(data, off, len, out, 0)
         return out
     }
 
-    private fun incrementCounter() {
-        for (i in 15 downTo 0) {
-            val v = (counter[i].toInt() and 0xFF) + 1
-            counter[i] = v.toByte()
-            if (v <= 0xFF) break
-        }
+    fun updateInPlace(buf: ByteArray, off: Int = 0, len: Int = buf.size - off) {
+        if (len <= 0) return
+        cipher.update(buf, off, len, buf, off)
+    }
+
+    fun updateInto(src: ByteArray, srcOff: Int, len: Int, dst: ByteArray, dstOff: Int = 0) {
+        if (len <= 0) return
+        cipher.update(src, srcOff, len, dst, dstOff)
     }
 }
 
@@ -207,54 +198,135 @@ object HandshakeCrypto {
 class MsgSplitter(private val protoInt: Int) {
     companion object {
         const val MAX_SPLIT_PACKET_LEN = 4 * 1024 * 1024
+        private const val INITIAL_CAP = 8192
+        private const val SHRINK_THRESHOLD = 256 * 1024
     }
 
-    private val cipherBuf = ByteArrayOutputStream()
-    private val plainBuf = ByteArrayOutputStream()
+    private var cipherBuf = ByteArray(INITIAL_CAP)
+    private var plainBuf = ByteArray(INITIAL_CAP)
+    private var start = 0
+    private var end = 0
     private var disabled = false
 
-    fun split(chunk: ByteArray, plain: ByteArray): List<ByteArray> {
-        if (chunk.isEmpty()) return emptyList()
-        if (disabled) return listOf(chunk)
+    fun split(chunk: ByteArray, plain: ByteArray): List<ByteArray> =
+        split(chunk, 0, plain, 0, minOf(chunk.size, plain.size))
 
-        cipherBuf.write(chunk)
-        plainBuf.write(plain)
+    fun split(
+        chunk: ByteArray,
+        chunkOff: Int,
+        plain: ByteArray,
+        plainOff: Int,
+        len: Int,
+    ): List<ByteArray> {
+        if (len <= 0) return emptyList()
+        if (disabled) {
+            return listOf(chunk.copyOfRange(chunkOff, chunkOff + len))
+        }
 
-        val cipherBytes = cipherBuf.toByteArray()
-        val plainBytes = plainBuf.toByteArray()
-        val parts = ArrayList<ByteArray>()
-        var offset = 0
-        val bufLen = cipherBytes.size
+        // Fast path when internal buffer is empty: slice complete packets directly without intermediate copying.
+        if (start == end) {
+            var pos = 0
+            var parts: ArrayList<ByteArray>? = null
+            while (pos < len) {
+                val packetLen = nextPacketLen(plain, plainOff + pos, len - pos) ?: break
+                if (packetLen <= 0) {
+                    val out = parts ?: ArrayList(1)
+                    out.add(chunk.copyOfRange(chunkOff + pos, chunkOff + len))
+                    disabled = true
+                    return out
+                }
+                val out = parts ?: ArrayList<ByteArray>(2).also { parts = it }
+                out.add(chunk.copyOfRange(chunkOff + pos, chunkOff + pos + packetLen))
+                pos += packetLen
+            }
+            if (pos < len) {
+                append(chunk, chunkOff + pos, plain, plainOff + pos, len - pos)
+            }
+            return parts ?: emptyList()
+        }
 
-        while (offset < bufLen) {
-            val packetLen = nextPacketLen(plainBytes, offset, bufLen - offset) ?: break
+        append(chunk, chunkOff, plain, plainOff, len)
+
+        var parts: ArrayList<ByteArray>? = null
+        while (end > start) {
+            val avail = end - start
+            val packetLen = nextPacketLen(plainBuf, start, avail) ?: break
             if (packetLen <= 0) {
-                parts.add(cipherBytes.copyOfRange(offset, bufLen))
-                offset = bufLen
+                val out = parts ?: ArrayList(1)
+                out.add(cipherBuf.copyOfRange(start, end))
+                start = 0
+                end = 0
+                maybeShrink()
                 disabled = true
-                break
+                return out
             }
-            parts.add(cipherBytes.copyOfRange(offset, offset + packetLen))
-            offset += packetLen
+            val out = parts ?: ArrayList<ByteArray>(2).also { parts = it }
+            out.add(cipherBuf.copyOfRange(start, start + packetLen))
+            start += packetLen
         }
 
-        if (offset > 0) {
-            cipherBuf.reset()
-            plainBuf.reset()
-            if (offset < bufLen) {
-                cipherBuf.write(cipherBytes, offset, bufLen - offset)
-                plainBuf.write(plainBytes, offset, bufLen - offset)
-            }
+        if (start == end) {
+            start = 0
+            end = 0
+            maybeShrink()
+        } else if (start >= cipherBuf.size / 2) {
+            compact()
         }
-        return parts
+        return parts ?: emptyList()
     }
 
     fun flush(): List<ByteArray> {
-        if (cipherBuf.size() == 0) return emptyList()
-        val tail = cipherBuf.toByteArray()
-        cipherBuf.reset()
-        plainBuf.reset()
+        if (end <= start) return emptyList()
+        val tail = cipherBuf.copyOfRange(start, end)
+        start = 0
+        end = 0
+        maybeShrink()
         return listOf(tail)
+    }
+
+    private fun append(chunk: ByteArray, chunkOff: Int, plain: ByteArray, plainOff: Int, len: Int) {
+        val needed = (end - start) + len
+        if (end + len > cipherBuf.size) {
+            if (start > 0 && needed <= cipherBuf.size) {
+                compact()
+            } else {
+                var newCap = cipherBuf.size
+                while (newCap < needed) {
+                    newCap = newCap shl 1
+                }
+                val remaining = end - start
+                val newCipher = ByteArray(newCap)
+                val newPlain = ByteArray(newCap)
+                if (remaining > 0) {
+                    System.arraycopy(cipherBuf, start, newCipher, 0, remaining)
+                    System.arraycopy(plainBuf, start, newPlain, 0, remaining)
+                }
+                cipherBuf = newCipher
+                plainBuf = newPlain
+                start = 0
+                end = remaining
+            }
+        }
+        System.arraycopy(chunk, chunkOff, cipherBuf, end, len)
+        System.arraycopy(plain, plainOff, plainBuf, end, len)
+        end += len
+    }
+
+    private fun compact() {
+        val remaining = end - start
+        if (remaining > 0 && start > 0) {
+            System.arraycopy(cipherBuf, start, cipherBuf, 0, remaining)
+            System.arraycopy(plainBuf, start, plainBuf, 0, remaining)
+        }
+        start = 0
+        end = remaining
+    }
+
+    private fun maybeShrink() {
+        if (cipherBuf.size > SHRINK_THRESHOLD) {
+            cipherBuf = ByteArray(INITIAL_CAP)
+            plainBuf = ByteArray(INITIAL_CAP)
+        }
     }
 
     private fun nextPacketLen(plain: ByteArray, offset: Int, avail: Int): Int? {

@@ -362,7 +362,7 @@ object FakeTls {
                 enabledProtocols = supportedProtocols.filter { it == "TLSv1.3" }.toTypedArray()
                 val params = sslParameters
                 params.serverNames = listOf(SNIHostName(domain))
-                params.applicationProtocols = arrayOf("h2", "http/1.1")
+                runCatching { params.applicationProtocols = arrayOf("h2", "http/1.1") }
                 sslParameters = params
             }
             engine.beginHandshake()
@@ -429,18 +429,26 @@ object FakeTls {
         }
     }
 
-    fun wrapTlsRecord(data: ByteArray): ByteArray {
-        val out = ByteArrayOutputStream(data.size + (data.size / TLS_APPDATA_MAX + 1) * 5)
-        var offset = 0
-        while (offset < data.size) {
-            val chunkLen = min(TLS_APPDATA_MAX, data.size - offset)
-            out.write(TLS_RECORD_APPDATA)
-            out.write(TLS_VERSION_12)
-            writeU16BE(out, chunkLen)
-            out.write(data, offset, chunkLen)
-            offset += chunkLen
+    fun wrapTlsRecord(data: ByteArray, off: Int = 0, len: Int = data.size - off): ByteArray {
+        if (len <= 0) return ByteArray(0)
+        val numRecords = (len + TLS_APPDATA_MAX - 1) / TLS_APPDATA_MAX
+        val out = ByteArray(len + numRecords * 5)
+        var srcPos = off
+        var dstPos = 0
+        var remaining = len
+        while (remaining > 0) {
+            val chunkLen = min(TLS_APPDATA_MAX, remaining)
+            out[dstPos++] = TLS_RECORD_APPDATA.toByte()
+            out[dstPos++] = 0x03
+            out[dstPos++] = 0x03
+            out[dstPos++] = ((chunkLen ushr 8) and 0xFF).toByte()
+            out[dstPos++] = (chunkLen and 0xFF).toByte()
+            System.arraycopy(data, srcPos, out, dstPos, chunkLen)
+            srcPos += chunkLen
+            dstPos += chunkLen
+            remaining -= chunkLen
         }
-        return out.toByteArray()
+        return out
     }
 
     suspend fun proxyToMaskingDomain(
@@ -542,105 +550,85 @@ class FakeTlsStream(
     private val rawOutput: OutputStream,
     private val rawSocket: Socket,
 ) {
-    private val readBuf = ByteArrayOutputStream()
+    private val readLock = Any()
+    private val writeLock = Any()
+    private val hdrBuf = ByteArray(5)
     private var readLeft = 0
 
-    @Synchronized
-    fun readExactly(n: Int): ByteArray {
-        while (readBuf.size() < n) {
-            val payload = readTlsPayload()
-            if (payload.isEmpty()) {
-                throw EOFException("Incomplete FakeTLS read: wanted $n, got ${readBuf.size()}")
+    fun readExactly(n: Int): ByteArray = synchronized(readLock) {
+        val out = ByteArray(n)
+        var off = 0
+        while (off < n) {
+            val r = readInto(out, off, n - off)
+            if (r <= 0) {
+                throw EOFException("Incomplete FakeTLS read: wanted $n, got $off")
             }
-            readBuf.write(payload)
+            off += r
         }
-        val all = readBuf.toByteArray()
-        val result = all.copyOfRange(0, n)
-        readBuf.reset()
-        if (all.size > n) {
-            readBuf.write(all, n, all.size - n)
-        }
-        return result
+        out
     }
 
-    @Synchronized
-    fun readSome(maxBytes: Int): Int {
-        throw UnsupportedOperationException("Use read(ByteArray)")
+    fun read(dst: ByteArray): Int = synchronized(readLock) {
+        readInto(dst, 0, dst.size)
     }
 
-    fun read(dst: ByteArray): Int {
-        if (readBuf.size() > 0) {
-            val all = readBuf.toByteArray()
-            val count = min(dst.size, all.size)
-            System.arraycopy(all, 0, dst, 0, count)
-            readBuf.reset()
-            if (all.size > count) {
-                readBuf.write(all, count, all.size - count)
-            }
-            return count
-        }
-        val payload = readTlsPayload()
-        if (payload.isEmpty()) return -1
-        val count = min(dst.size, payload.size)
-        System.arraycopy(payload, 0, dst, 0, count)
-        if (payload.size > count) {
-            readBuf.write(payload, count, payload.size - count)
-        }
-        return count
-    }
-
-    private fun readTlsPayload(): ByteArray {
+    private fun readInto(dst: ByteArray, dstOff: Int, dstLen: Int): Int {
+        if (dstLen <= 0) return 0
         if (readLeft > 0) {
-            val buf = ByteArray(min(readLeft, 65536))
-            val n = rawInput.read(buf)
-            if (n <= 0) return ByteArray(0)
+            val n = rawInput.read(dst, dstOff, min(dstLen, readLeft))
+            if (n <= 0) return -1
             readLeft -= n
-            return if (n == buf.size) buf else buf.copyOfRange(0, n)
+            return n
         }
 
         while (true) {
-            val hdr = ByteArray(5)
             try {
-                rawInput.readFully(hdr)
+                rawInput.readFully(hdrBuf)
             } catch (_: EOFException) {
-                return ByteArray(0)
+                return -1
             }
-            val rtype = hdr[0].toInt() and 0xFF
-            val recLen = ((hdr[3].toInt() and 0xFF) shl 8) or (hdr[4].toInt() and 0xFF)
+            val rtype = hdrBuf[0].toInt() and 0xFF
+            val recLen = ((hdrBuf[3].toInt() and 0xFF) shl 8) or (hdrBuf[4].toInt() and 0xFF)
 
             if (rtype == FakeTls.TLS_RECORD_CCS) {
                 if (recLen > 64) {
-                    return ByteArray(0)
+                    return -1
                 }
                 if (recLen > 0) {
-                    val skip = ByteArray(recLen)
-                    rawInput.readFully(skip)
+                    var rem = recLen
+                    while (rem > 0) {
+                        val skipped = rawInput.skipBytes(rem)
+                        if (skipped <= 0) {
+                            // fallback if stream doesn't support skip
+                            rawInput.readUnsignedByte()
+                            rem--
+                        } else {
+                            rem -= skipped
+                        }
+                    }
                 }
                 continue
             }
 
             if (rtype != FakeTls.TLS_RECORD_APPDATA || recLen > FakeTls.TLS_APPDATA_MAX + 2048) {
-                return ByteArray(0)
+                return -1
             }
 
             if (recLen == 0) continue
-            val buf = ByteArray(min(recLen, 65536))
-            val n = rawInput.read(buf)
-            if (n <= 0) return ByteArray(0)
-            val remaining = recLen - n
-            if (remaining > 0) {
-                readLeft = remaining
-            }
-            return if (n == buf.size) buf else buf.copyOfRange(0, n)
+            val n = rawInput.read(dst, dstOff, min(dstLen, recLen))
+            if (n <= 0) return -1
+            readLeft = recLen - n
+            return n
         }
     }
 
-    @Synchronized
-    fun write(data: ByteArray) {
-        if (data.isEmpty()) return
-        val wrapped = FakeTls.wrapTlsRecord(data)
-        rawOutput.write(wrapped)
-        rawOutput.flush()
+    fun write(data: ByteArray, off: Int = 0, len: Int = data.size - off) {
+        if (len <= 0) return
+        val wrapped = FakeTls.wrapTlsRecord(data, off, len)
+        synchronized(writeLock) {
+            rawOutput.write(wrapped)
+            rawOutput.flush()
+        }
     }
 
     fun close() {

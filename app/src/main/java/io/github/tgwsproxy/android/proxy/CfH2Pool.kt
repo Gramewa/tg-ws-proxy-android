@@ -1,6 +1,7 @@
 package io.github.tgwsproxy.android.proxy
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -10,29 +11,38 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
+import okhttp3.Dns
 import okhttp3.EventListener
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.UnknownHostException
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.resumeWithException
 
 class MtProtoTransportError(
     val code: Int,
@@ -41,6 +51,7 @@ class MtProtoTransportError(
 
 class CfH2Pool(
     private val balancer: DomainBalancer,
+    private val configProvider: () -> ProxyConfig = { ProxyConfig() },
 ) {
     companion object {
         const val MAX_PACKET = 4 * 1024 * 1024
@@ -52,6 +63,7 @@ class CfH2Pool(
         const val DOMAIN_COOLDOWN_MS = 30_000L
         const val REQUEST_TIMEOUT_MS = 65_000L
         const val SETUP_TIMEOUT_MS = 8_000L
+        const val RACE_STAGGER_MS = 1_200L
         const val REPLAY_REQUEST_MS = 3_000L
         const val REPLAY_CHECK_MS = 250L
         const val REPLAY_MAX_AGE_MS = 30_000L
@@ -64,7 +76,11 @@ class CfH2Pool(
         private val random = SecureRandom()
 
         fun readMtProtoPacket(stream: ClientStream, cltDec: AesCtr, protoTag: ByteArray): Pair<ByteArray, Boolean> {
-            fun plaintext(count: Int): ByteArray = cltDec.update(stream.readExactly(count))
+            fun plaintext(count: Int): ByteArray {
+                val buf = stream.readExactly(count)
+                cltDec.updateInPlace(buf)
+                return buf
+            }
 
             val quick: Boolean
             val length: Int
@@ -160,7 +176,62 @@ class CfH2Pool(
             }
             return out.toByteArray()
         }
+
+        private suspend fun awaitResponse(call: Call): Response = suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation {
+                runCatching { call.cancel() }
+            }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) {
+                        cont.resumeWithException(e)
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (cont.isActive) {
+                        cont.resumeWith(Result.success(response))
+                    } else {
+                        runCatching { response.close() }
+                    }
+                }
+            })
+        }
     }
+
+    private val sharedDispatcher = Dispatcher().apply {
+        maxRequests = 128
+        maxRequestsPerHost = 64
+    }
+
+    private val dynamicDns = Dns { hostname ->
+        val cfg = configProvider()
+        try {
+            DnsResolver.resolve(
+                host = hostname,
+                dohProvider = cfg.dohProvider,
+                ipPreference = cfg.ipPreference,
+                cleanIpOverride = cfg.effectiveCfCleanIp,
+            )
+        } catch (e: UnknownHostException) {
+            throw e
+        } catch (e: Exception) {
+            throw UnknownHostException("H2 DNS lookup failed for $hostname: ${e.message}").apply { initCause(e) }
+        }
+    }
+
+    private val baseClient: OkHttpClient = OkHttpClient.Builder()
+        .dispatcher(sharedDispatcher)
+        .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+        .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
+        .pingInterval(25, TimeUnit.SECONDS)
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(65, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(65, TimeUnit.SECONDS)
+        .dns(dynamicDns)
+        .proxy(Proxy.NO_PROXY)
+        .build()
 
     private sealed class ReplyItem {
         data class Data(val bytes: ByteArray) : ReplyItem()
@@ -182,6 +253,7 @@ class CfH2Pool(
 
     inner class HttpLane(
         val host: String,
+        val baseDomain: String,
         val laneId: Int,
     ) {
         @Volatile var failedUntilMs: Long = 0L
@@ -197,14 +269,8 @@ class CfH2Pool(
         private val streamPermits = Semaphore(MAX_LANE_REQUESTS)
         private val reserveLock = Any()
 
-        val client: OkHttpClient = OkHttpClient.Builder()
-            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
-            .connectionPool(ConnectionPool(2, 5, TimeUnit.MINUTES))
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(65, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .callTimeout(65, TimeUnit.SECONDS)
-            .proxy(Proxy.NO_PROXY)
+        // Shares baseClient's Dispatcher, ConnectionPool, and thread pool with a per-lane EventListener.
+        val client: OkHttpClient = baseClient.newBuilder()
             .eventListener(object : EventListener() {
                 override fun connectStart(call: Call, inetSocketAddress: InetSocketAddress, proxy: Proxy) {
                     tcpConnections.incrementAndGet()
@@ -214,28 +280,26 @@ class CfH2Pool(
             })
             .build()
 
-        suspend fun preflight() = withContext(Dispatchers.IO) {
+        suspend fun preflight(): Long {
             val started = System.currentTimeMillis()
             val req = Request.Builder()
                 .url("https://$host/api")
                 .head()
                 .build()
             val call = client.newCall(req)
-            try {
-                call.execute().use { response ->
-                    if (response.protocol != Protocol.HTTP_2) {
-                        throw IOException("CF /api preflight negotiated ${response.protocol}")
-                    }
-                    val code = response.code
-                    if (code !in 200..299 && code != 405 && code != 501) {
-                        val ray = response.header("cf-ray") ?: "-"
-                        throw IOException("CF /api preflight HTTP $code cf_ray=$ray")
-                    }
-                    ProxyLogger.d("H2 lane=$laneId ready host=$host status=$code ms=${System.currentTimeMillis() - started}")
+            val response = awaitResponse(call)
+            return response.use { resp ->
+                if (resp.protocol != Protocol.HTTP_2) {
+                    throw IOException("CF /api preflight negotiated ${resp.protocol}")
                 }
-            } catch (e: CancellationException) {
-                call.cancel()
-                throw e
+                val code = resp.code
+                if (code !in 200..299 && code != 405 && code != 501) {
+                    val ray = resp.header("cf-ray") ?: "-"
+                    throw IOException("CF /api preflight HTTP $code cf_ray=$ray")
+                }
+                val elapsed = (System.currentTimeMillis() - started).coerceAtLeast(1L)
+                ProxyLogger.d("H2 lane=$laneId ready host=$host status=$code ms=$elapsed")
+                elapsed
             }
         }
 
@@ -285,7 +349,7 @@ class CfH2Pool(
             streamPermits.release()
         }
 
-        suspend fun post(body: ByteArray, channelId: Int, replay: Boolean): ByteArray = withContext(Dispatchers.IO) {
+        suspend fun post(body: ByteArray, channelId: Int, replay: Boolean): ByteArray {
             val reqId = requests.incrementAndGet()
             ProxyStats.h2Requests.incrementAndGet()
             val req = Request.Builder()
@@ -295,45 +359,48 @@ class CfH2Pool(
                 .build()
             val call = client.newCall(req)
             try {
-                call.execute().use { response ->
-                    val ray = response.header("cf-ray") ?: "-"
-                    if (response.protocol != Protocol.HTTP_2) {
-                        throw IOException("CF /api downgraded to ${response.protocol}")
-                    }
-                    val code = response.code
-                    if (code in setOf(403, 404, 429, 444)) {
-                        throw MtProtoTransportError(-code, "HTTP $code cf_ray=$ray")
-                    }
-                    if (code != 200) {
-                        throw IOException("CF /api HTTP $code cf_ray=$ray")
-                    }
-                    val ctype = response.header("Content-Type")?.lowercase().orEmpty()
-                    if ("text/html" in ctype) {
-                        throw IOException("CF /api returned HTML instead of MTProto")
-                    }
-                    val respBody = response.body ?: throw IOException("Empty H2 response body")
-                    val declared = respBody.contentLength()
-                    if (declared > MAX_PACKET) {
-                        throw IOException("H2 response Content-Length exceeds native packet bound")
-                    }
-                    val bytes = respBody.bytes()
-                    if (bytes.size > MAX_PACKET) {
-                        throw IOException("H2 response exceeds native packet bound")
-                    }
-                    if (bytes.size % 4 != 0) {
-                        throw IOException("CF /api response is not an aligned MTProto packet")
-                    }
-                    if (bytes.size == 4) {
-                        val errCode = (bytes[0].toInt() and 0xFF) or
-                            ((bytes[1].toInt() and 0xFF) shl 8) or
-                            ((bytes[2].toInt() and 0xFF) shl 16) or
-                            ((bytes[3].toInt() and 0xFF) shl 24)
-                        if (errCode < 0) {
-                            throw MtProtoTransportError(errCode, "HTTP 200 payload")
+                val response = awaitResponse(call)
+                return withContext(Dispatchers.IO) {
+                    response.use { resp ->
+                        val ray = resp.header("cf-ray") ?: "-"
+                        if (resp.protocol != Protocol.HTTP_2) {
+                            throw IOException("CF /api downgraded to ${resp.protocol}")
                         }
+                        val code = resp.code
+                        if (code in setOf(403, 404, 429, 444)) {
+                            throw MtProtoTransportError(-code, "HTTP $code cf_ray=$ray")
+                        }
+                        if (code != 200) {
+                            throw IOException("CF /api HTTP $code cf_ray=$ray")
+                        }
+                        val ctype = resp.header("Content-Type")?.lowercase().orEmpty()
+                        if ("text/html" in ctype) {
+                            throw IOException("CF /api returned HTML instead of MTProto")
+                        }
+                        val respBody = resp.body ?: throw IOException("Empty H2 response body")
+                        val declared = respBody.contentLength()
+                        if (declared > MAX_PACKET) {
+                            throw IOException("H2 response Content-Length exceeds native packet bound")
+                        }
+                        val bytes = respBody.bytes()
+                        if (bytes.size > MAX_PACKET) {
+                            throw IOException("H2 response exceeds native packet bound")
+                        }
+                        if (bytes.size % 4 != 0) {
+                            throw IOException("CF /api response is not an aligned MTProto packet")
+                        }
+                        if (bytes.size == 4) {
+                            val errCode = (bytes[0].toInt() and 0xFF) or
+                                ((bytes[1].toInt() and 0xFF) shl 8) or
+                                ((bytes[2].toInt() and 0xFF) shl 16) or
+                                ((bytes[3].toInt() and 0xFF) shl 24)
+                            if (errCode < 0) {
+                                throw MtProtoTransportError(errCode, "HTTP 200 payload")
+                            }
+                        }
+                        responses.incrementAndGet()
+                        bytes
                     }
-                    responses.incrementAndGet()
-                    bytes
                 }
             } catch (e: CancellationException) {
                 call.cancel()
@@ -344,6 +411,7 @@ class CfH2Pool(
             } catch (e: Exception) {
                 errors.incrementAndGet()
                 failedUntilMs = System.currentTimeMillis() + DOMAIN_COOLDOWN_MS
+                balancer.reportFailure(baseDomain, tlsSpecific = false)
                 ProxyLogger.d("H2 lane=$laneId ch=$channelId req=$reqId replay=$replay failed: ${e.javaClass.simpleName}: ${e.message}")
                 throw e
             }
@@ -357,9 +425,6 @@ class CfH2Pool(
             closed = true
             channels.toList().forEach { it.closeQuietly() }
             channels.clear()
-            client.dispatcher.cancelAll()
-            client.connectionPool.evictAll()
-            client.dispatcher.executorService.shutdown()
         }
     }
 
@@ -387,6 +452,7 @@ class CfH2Pool(
         private var replyBytes = 0
 
         private val replyQueue = Channel<ReplyItem>(16)
+        private val recoverWake = Channel<Unit>(Channel.CONFLATED)
 
         init {
             lane.channels.add(this)
@@ -409,6 +475,7 @@ class CfH2Pool(
                 replyBytes = 0
             }
             replyQueue.trySend(ReplyItem.Failure(err))
+            recoverWake.trySend(Unit)
         }
 
         suspend fun send(scope: CoroutineScope, body: ByteArray, replay: Boolean): Boolean {
@@ -472,6 +539,7 @@ class CfH2Pool(
                 }
             }
             job.start()
+            recoverWake.trySend(Unit)
             return true
         }
 
@@ -530,6 +598,7 @@ class CfH2Pool(
                         lane.release(len)
                     }
                 }
+                recoverWake.trySend(Unit)
             }
         }
 
@@ -539,6 +608,7 @@ class CfH2Pool(
                     synchronized(stateLock) {
                         replyBytes -= item.bytes.size
                     }
+                    recoverWake.trySend(Unit)
                     return item.bytes
                 }
                 is ReplyItem.Failure -> throw item.error
@@ -547,14 +617,66 @@ class CfH2Pool(
 
         suspend fun recoverLoop(scope: CoroutineScope) {
             while (!closed && scope.isActive) {
-                delay(REPLAY_CHECK_MS)
-                if (closed || delivering || synchronized(stateLock) { replyBytes > 0 }) continue
                 val now = System.currentTimeMillis()
-                val candidate = synchronized(stateLock) {
-                    replayHistory.firstOrNull { isReplayDue(it, now) && it.pendingJob == null }
-                } ?: continue
-                send(scope, candidate.body, replay = true)
+                val nextAction = synchronized(stateLock) {
+                    if (closed) {
+                        -2L to null
+                    } else if (delivering || replyBytes > 0) {
+                        -1L to null
+                    } else {
+                        val due = replayHistory.firstOrNull { isReplayDue(it, now) && it.pendingJob == null }
+                        if (due != null) {
+                            0L to due
+                        } else {
+                            computeNextReplayWaitMsLocked(now) to null
+                        }
+                    }
+                }
+                val waitMs = nextAction.first
+                val candidate = nextAction.second
+                if (waitMs == -2L) break
+                if (candidate != null) {
+                    send(scope, candidate.body, replay = true)
+                    delay(REPLAY_CHECK_MS)
+                } else if (waitMs < 0L) {
+                    // Nothing eligible right now; sleep cleanly without polling until state changes.
+                    val sig = recoverWake.receiveCatching()
+                    if (sig.isClosed) break
+                } else {
+                    val sig = withTimeoutOrNull(waitMs.coerceAtLeast(REPLAY_CHECK_MS)) {
+                        recoverWake.receiveCatching()
+                    }
+                    if (sig != null && sig.isClosed) break
+                }
             }
+        }
+
+        private fun computeNextReplayWaitMsLocked(nowMs: Long): Long {
+            var earliest = Long.MAX_VALUE
+            val last = replayHistory.lastOrNull()
+            for (entry in replayHistory) {
+                val age = nowMs - entry.sentAtMs
+                if (age !in 0..REPLAY_MAX_AGE_MS) continue
+                val isLast = entry === last
+                val limit = if (entry.originalJobs.isNotEmpty() || isLast) REPLAY_MAX_ATTEMPTS else 0
+                if (entry.attempts >= limit || entry.pendingJob != null) continue
+
+                if (entry.originalJobs.isNotEmpty()) {
+                    for (job in entry.originalJobs) {
+                        val sent = sentSinceMs[job] ?: continue
+                        val at = sent + REPLAY_REQUEST_MS
+                        if (at < earliest) earliest = at
+                    }
+                } else if (isLast && pending.isEmpty()) {
+                    val retryAt = if (entry.replayed) {
+                        maxOf(entry.lastAttemptAtMs + REPLAY_RETRY_MS, lastProgressMs + 1000L)
+                    } else {
+                        nowMs + REPLAY_CHECK_MS
+                    }
+                    if (retryAt < earliest) earliest = retryAt
+                }
+            }
+            return if (earliest == Long.MAX_VALUE) -1L else (earliest - nowMs).coerceAtLeast(REPLAY_CHECK_MS)
         }
 
         private fun isReplayDue(entry: ReplayPacket, nowMs: Long): Boolean {
@@ -614,11 +736,11 @@ class CfH2Pool(
             toCancel.forEach { it.cancel() }
             lane.channels.remove(this)
             replyQueue.close()
+            recoverWake.close()
         }
     }
 
     private val lock = Any()
-    private val openMutex = Mutex()
     private val lanes = HashMap<String, HttpLane>()
     private val failedUntilMs = HashMap<String, Long>()
     private val setupRetryAfterMs = HashMap<Int, Long>()
@@ -650,54 +772,137 @@ class CfH2Pool(
 
     private suspend fun openInternal(dc: Int, label: String): HttpChannel? {
         if (closed || dc !in DC_DEFAULT_IPS) return null
-        for (baseDomain in balancer.getDomainsForDc(dc)) {
-            val host = "kws$dc.$baseDomain"
-            openMutex.withLock {
-                if (closed) return null
-                val now = System.currentTimeMillis()
-                val existing = synchronized(lock) { lanes[host] }
-                val blockedUntil = maxOf(
-                    synchronized(lock) { failedUntilMs[host] ?: 0L },
-                    existing?.failedUntilMs ?: 0L,
-                )
-                if (now < blockedUntil) return@withLock
+        val domains = balancer.getDomainsForDc(dc)
+        if (domains.isEmpty()) return null
 
-                val lane = existing ?: run {
-                    val laneId = synchronized(lock) { ++nextLaneId }
-                    val candidate = HttpLane(host, laneId)
-                    try {
-                        candidate.preflight()
-                    } catch (e: CancellationException) {
-                        candidate.close()
-                        throw e
-                    } catch (exc: Exception) {
-                        ProxyStats.h2Errors.incrementAndGet()
-                        synchronized(lock) {
-                            failedUntilMs[host] = System.currentTimeMillis() + DOMAIN_COOLDOWN_MS
-                        }
-                        ProxyLogger.w("[$label] H2 lane=$laneId preflight failed host=$host: ${exc.javaClass.simpleName}: ${exc.message}")
-                        candidate.close()
-                        return@withLock
-                    }
-                    if (closed) {
-                        candidate.close()
-                        return null
-                    }
-                    synchronized(lock) { lanes[host] = candidate }
-                    candidate
+        val now = System.currentTimeMillis()
+
+        // Fast path: reuse an already-established healthy lane for any top domain.
+        val reusable = synchronized(lock) {
+            var found: Pair<HttpLane, String>? = null
+            for (baseDomain in domains) {
+                val host = "kws$dc.$baseDomain"
+                val existing = lanes[host] ?: continue
+                if (existing.closed) continue
+                val blockedUntil = maxOf(failedUntilMs[host] ?: 0L, existing.failedUntilMs)
+                if (now >= blockedUntil) {
+                    found = existing to baseDomain
+                    break
                 }
+            }
+            found
+        }
+        if (reusable != null) {
+            return attachChannel(dc, reusable.first, reusable.second, label)
+        }
 
-                val channelId = synchronized(lock) { ++nextChannelId }
-                val channel = HttpChannel(lane, channelId, label)
-                balancer.updateDomainForDc(dc, baseDomain)
-                ProxyLogger.i(
-                    "[$label] ROUTE DC$dc media -> H2 lane=${lane.laneId} ch=$channelId host=$host " +
-                        "channels=${lane.channels.size} tcp=${lane.tcpConnections.get()}"
-                )
-                return channel
+        // Collect up to 3 unblocked candidates and race preflights with 1.2s stagger (no global lock held!).
+        val candidates = ArrayList<Pair<String, String>>(3)
+        synchronized(lock) {
+            for (baseDomain in domains) {
+                val host = "kws$dc.$baseDomain"
+                val existing = lanes[host]
+                val blockedUntil = maxOf(failedUntilMs[host] ?: 0L, existing?.failedUntilMs ?: 0L)
+                if (now < blockedUntil) continue
+                candidates.add(baseDomain to host)
+                if (candidates.size >= 3) break
             }
         }
-        return null
+        if (candidates.isEmpty()) return null
+
+        val winner = AtomicReference<Triple<HttpLane, String, Long>?>(null)
+        val done = CompletableDeferred<Triple<HttpLane, String, Long>?>()
+        val remaining = AtomicInteger(candidates.size)
+        val failedSignal = Channel<Unit>(Channel.CONFLATED)
+
+        val won = coroutineScope {
+            val launcher = launch(Dispatchers.IO) {
+                for ((idx, pair) in candidates.withIndex()) {
+                    if (closed || winner.get() != null || !isActive) break
+                    if (idx > 0) {
+                        withTimeoutOrNull(RACE_STAGGER_MS) { failedSignal.receive() }
+                        if (closed || winner.get() != null || !isActive) break
+                    }
+                    val (baseDomain, host) = pair
+                    launch {
+                        val laneId = synchronized(lock) { ++nextLaneId }
+                        val candidate = HttpLane(host, baseDomain, laneId)
+                        try {
+                            val rtt = candidate.preflight()
+                            val triple = Triple(candidate, baseDomain, rtt)
+                            if (!closed && winner.compareAndSet(null, triple)) {
+                                if (!done.complete(triple)) {
+                                    candidate.close()
+                                }
+                            } else {
+                                candidate.close()
+                            }
+                        } catch (e: CancellationException) {
+                            candidate.close()
+                            throw e
+                        } catch (exc: Exception) {
+                            candidate.close()
+                            ProxyStats.h2Errors.incrementAndGet()
+                            synchronized(lock) {
+                                failedUntilMs[host] = System.currentTimeMillis() + DOMAIN_COOLDOWN_MS
+                            }
+                            balancer.reportFailure(baseDomain, tlsSpecific = false)
+                            ProxyLogger.w("[$label] H2 lane=$laneId preflight failed host=$host: ${exc.javaClass.simpleName}: ${exc.message}")
+                            failedSignal.trySend(Unit)
+                            if (remaining.decrementAndGet() == 0) {
+                                done.complete(null)
+                            }
+                        }
+                    }
+                }
+            }
+
+            val res = try {
+                done.await()
+            } catch (e: CancellationException) {
+                done.cancel()
+                launcher.cancel()
+                failedSignal.close()
+                winner.getAndSet(null)?.first?.close()
+                throw e
+            }
+            launcher.cancel()
+            failedSignal.close()
+            res
+        } ?: return null
+
+        val (candidateLane, baseDomain, rtt) = won
+        if (closed) {
+            candidateLane.close()
+            return null
+        }
+
+        val adoptedLane = synchronized(lock) {
+            val existing = lanes[candidateLane.host]
+            if (existing != null && !existing.closed && System.currentTimeMillis() >= existing.failedUntilMs) {
+                existing
+            } else {
+                lanes[candidateLane.host] = candidateLane
+                candidateLane
+            }
+        }
+        if (adoptedLane !== candidateLane) {
+            candidateLane.close()
+        }
+
+        balancer.reportSuccess(dc, baseDomain, rtt, usedPort80 = false)
+        return attachChannel(dc, adoptedLane, baseDomain, label)
+    }
+
+    private fun attachChannel(dc: Int, lane: HttpLane, baseDomain: String, label: String): HttpChannel {
+        val channelId = synchronized(lock) { ++nextChannelId }
+        val channel = HttpChannel(lane, channelId, label)
+        balancer.updateDomainForDc(dc, baseDomain)
+        ProxyLogger.i(
+            "[$label] ROUTE DC$dc media -> H2 lane=${lane.laneId} ch=$channelId host=${lane.host} " +
+                "channels=${lane.channels.size} tcp=${lane.tcpConnections.get()}"
+        )
+        return channel
     }
 
     suspend fun bridgeH2(
@@ -707,7 +912,8 @@ class CfH2Pool(
         protoTag: ByteArray,
     ) = withContext(Dispatchers.IO) {
         fun writeNative(data: ByteArray) {
-            stream.write(ctx.cltEnc.update(data))
+            ctx.cltEnc.updateInPlace(data)
+            stream.write(data)
         }
 
         try {
@@ -792,16 +998,30 @@ class CfH2Pool(
         }
     }
 
+    fun onConfigUpdated() {
+        synchronized(lock) {
+            failedUntilMs.clear()
+            setupRetryAfterMs.clear()
+            for (lane in lanes.values) {
+                lane.failedUntilMs = 0L
+            }
+        }
+        runCatching { baseClient.connectionPool.evictAll() }
+    }
+
     fun onNetworkChanged() {
         val snapshot = synchronized(lock) {
             failedUntilMs.clear()
             setupRetryAfterMs.clear()
-            lanes.values.toList()
+            val list = lanes.values.toList()
+            lanes.clear()
+            list
         }
         for (lane in snapshot) {
-            lane.failedUntilMs = 0L
-            runCatching { lane.client.connectionPool.evictAll() }
+            lane.close()
         }
+        runCatching { baseClient.dispatcher.cancelAll() }
+        runCatching { baseClient.connectionPool.evictAll() }
     }
 
     fun close() {
@@ -812,5 +1032,8 @@ class CfH2Pool(
             list
         }
         toClose.forEach { it.close() }
+        runCatching { baseClient.dispatcher.cancelAll() }
+        runCatching { baseClient.connectionPool.evictAll() }
+        runCatching { baseClient.dispatcher.executorService.shutdown() }
     }
 }

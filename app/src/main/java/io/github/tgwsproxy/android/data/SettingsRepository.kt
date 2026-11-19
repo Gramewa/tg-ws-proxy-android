@@ -9,6 +9,8 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import io.github.tgwsproxy.android.proxy.DEFAULT_FRONTING_SNI
+import io.github.tgwsproxy.android.proxy.DnsResolver
 import io.github.tgwsproxy.android.proxy.generateSecretHex
 import io.github.tgwsproxy.android.proxy.isValidSecretHex
 import kotlinx.coroutines.flow.Flow
@@ -31,6 +33,12 @@ class SettingsRepository(private val context: Context) {
         val CFPROXY_CUSTOM_DOMAINS = stringPreferencesKey("cfproxy_custom_domains")
         val CFWORKER_DOMAINS = stringPreferencesKey("cfworker_domains")
         val DISABLE_SECURE = booleanPreferencesKey("disable_secure")
+        val AUTO_PORT80_FALLBACK = booleanPreferencesKey("auto_port80_fallback")
+        val FRONTING_SNI = stringPreferencesKey("fronting_sni")
+        val DOH_PROVIDER = stringPreferencesKey("doh_provider")
+        val CF_CLEAN_IP = stringPreferencesKey("cf_clean_ip")
+        val IP_PREFERENCE = stringPreferencesKey("ip_preference")
+        val CACHED_CF_DOMAINS = stringPreferencesKey("cached_cf_domains")
         val FAKE_TLS_DOMAIN = stringPreferencesKey("fake_tls_domain")
         val BUFFER_KB = intPreferencesKey("buffer_kb")
         val POOL_SIZE = intPreferencesKey("pool_size")
@@ -66,6 +74,12 @@ class SettingsRepository(private val context: Context) {
             cfproxyCustomDomains = prefs[Keys.CFPROXY_CUSTOM_DOMAINS] ?: "",
             cfworkerDomains = prefs[Keys.CFWORKER_DOMAINS] ?: "",
             disableSecure = prefs[Keys.DISABLE_SECURE] ?: false,
+            autoPort80Fallback = prefs[Keys.AUTO_PORT80_FALLBACK] ?: true,
+            frontingSni = prefs[Keys.FRONTING_SNI] ?: DEFAULT_FRONTING_SNI,
+            dohProvider = prefs[Keys.DOH_PROVIDER] ?: DnsResolver.DOH_SYSTEM,
+            cfCleanIp = prefs[Keys.CF_CLEAN_IP] ?: "",
+            ipPreference = prefs[Keys.IP_PREFERENCE] ?: DnsResolver.IP_PREF_AUTO,
+            cachedCfDomains = prefs[Keys.CACHED_CF_DOMAINS] ?: "",
             fakeTlsDomain = prefs[Keys.FAKE_TLS_DOMAIN] ?: "",
             bufferKb = prefs[Keys.BUFFER_KB] ?: 256,
             poolSize = prefs[Keys.POOL_SIZE] ?: 4,
@@ -104,6 +118,13 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    suspend fun saveCachedCfDomains(domains: List<String>) {
+        val joined = domains.joinToString("\n")
+        context.dataStore.edit { prefs ->
+            prefs[Keys.CACHED_CF_DOMAINS] = joined
+        }
+    }
+
     suspend fun update(transform: (AppSettings) -> AppSettings): AppSettings {
         val current = ensureInitialized()
         val updated = transform(current)
@@ -127,6 +148,14 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.CFPROXY_CUSTOM_DOMAINS] = settings.cfproxyCustomDomains
             prefs[Keys.CFWORKER_DOMAINS] = settings.cfworkerDomains
             prefs[Keys.DISABLE_SECURE] = settings.disableSecure
+            prefs[Keys.AUTO_PORT80_FALLBACK] = settings.autoPort80Fallback
+            prefs[Keys.FRONTING_SNI] = settings.frontingSni
+            prefs[Keys.DOH_PROVIDER] = settings.dohProvider
+            prefs[Keys.CF_CLEAN_IP] = settings.cfCleanIp
+            prefs[Keys.IP_PREFERENCE] = settings.ipPreference
+            if (settings.cachedCfDomains.isNotEmpty()) {
+                prefs[Keys.CACHED_CF_DOMAINS] = settings.cachedCfDomains
+            }
             prefs[Keys.FAKE_TLS_DOMAIN] = settings.fakeTlsDomain
             prefs[Keys.BUFFER_KB] = settings.bufferKb
             prefs[Keys.POOL_SIZE] = settings.poolSize

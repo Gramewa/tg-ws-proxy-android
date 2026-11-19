@@ -76,8 +76,10 @@ import io.github.tgwsproxy.android.SegmentedChoiceBar
 import io.github.tgwsproxy.android.data.AppSettings
 import io.github.tgwsproxy.android.proxy.CFPROXY_DEFAULT_DOMAINS
 import io.github.tgwsproxy.android.proxy.ConnectivityTester
+import io.github.tgwsproxy.android.proxy.DEFAULT_FRONTING_SNI
 import io.github.tgwsproxy.android.proxy.DcConnectivityStatus
 import io.github.tgwsproxy.android.proxy.DcParseResult
+import io.github.tgwsproxy.android.proxy.DnsResolver
 import io.github.tgwsproxy.android.proxy.buildTelegramProxyLink
 import io.github.tgwsproxy.android.proxy.coerceDomainList
 import io.github.tgwsproxy.android.proxy.generateSecretHex
@@ -137,10 +139,11 @@ fun SettingsScreen(strings: AppStrings) {
     }
 
     // Keep quick-toggle fields synced from external toggles only when user doesn't have unsaved edits
-    LaunchedEffect(saved.disableSecure, saved.cfproxyEnabled, saved.cfproxyH2Media) {
+    LaunchedEffect(saved.disableSecure, saved.autoPort80Fallback, saved.cfproxyEnabled, saved.cfproxyH2Media) {
         if (!hasUnsavedChanges) {
             draft = draft.copy(
                 disableSecure = saved.disableSecure,
+                autoPort80Fallback = saved.autoPort80Fallback,
                 cfproxyEnabled = saved.cfproxyEnabled,
                 cfproxyH2Media = saved.cfproxyH2Media,
             )
@@ -184,6 +187,11 @@ fun SettingsScreen(strings: AppStrings) {
                 cfworkerDomains = draft.cfworkerDomains.trim(),
                 verboseLogging = draft.verboseLogging,
                 disableSecure = draft.disableSecure,
+                autoPort80Fallback = draft.autoPort80Fallback,
+                frontingSni = draft.frontingSni.trim().lowercase().ifEmpty { DEFAULT_FRONTING_SNI },
+                dohProvider = draft.dohProvider.trim().lowercase(),
+                cfCleanIp = draft.cfCleanIp.trim(),
+                ipPreference = draft.ipPreference.trim().lowercase(),
                 bufferKb = bufferText.trim().toInt(),
                 poolSize = poolText.trim().toInt(),
             )
@@ -198,8 +206,12 @@ fun SettingsScreen(strings: AppStrings) {
 
             scope.launch {
                 val wasRunning = isRunning
-                ProxyController.saveSettings(finalSettings, restartIfRunning = true)
-                val msg = if (wasRunning) strings.settingsSavedRestarted else strings.settingsSavedApplied
+                val restarted = ProxyController.saveSettings(finalSettings, restartIfRunning = true)
+                val msg = when {
+                    !wasRunning -> strings.settingsSavedApplied
+                    restarted -> strings.settingsSavedRestarted
+                    else -> strings.settingsSavedHotReloaded
+                }
                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             }
         }
@@ -465,6 +477,32 @@ fun SettingsScreen(strings: AppStrings) {
                     onCheckedChange = { draft = draft.copy(cfproxyH2Media = it) },
                 )
 
+                val autoPort80Allowed = draft.cfproxyEnabled && !draft.disableSecure
+                SettingsSwitchRow(
+                    title = strings.labelAutoPort80,
+                    subtitle = strings.subAutoPort80,
+                    checked = draft.autoPort80Fallback && autoPort80Allowed,
+                    enabled = autoPort80Allowed,
+                    onCheckedChange = { draft = draft.copy(autoPort80Fallback = it) },
+                )
+
+                OutlinedTextField(
+                    value = draft.cfCleanIp,
+                    onValueChange = { draft = draft.copy(cfCleanIp = it) },
+                    label = {
+                        Text(
+                            text = strings.labelCfCleanIp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    placeholder = { Text(strings.hintCfCleanIp) },
+                    singleLine = true,
+                    shape = fieldShape,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
                 SettingsSwitchRow(
                     title = strings.labelCfCustomDomainsToggle,
                     checked = draft.cfproxyCustomDomainsEnabled,
@@ -490,12 +528,32 @@ fun SettingsScreen(strings: AppStrings) {
                             try {
                                 val secure = !draft.disableSecure
                                 val custom = coerceDomainList(draft.cfproxyCustomDomains)
+                                val doh = draft.dohProvider
+                                val ipPref = draft.ipPreference
+                                val cleanIp = draft.cfCleanIp.trim().let {
+                                    if (DnsResolver.isValidIpAddress(it)) it else ""
+                                }
                                 if (draft.cfproxyCustomDomainsEnabled && custom.isNotEmpty()) {
-                                    val res = ConnectivityTester.testCfProxyMulti(custom, secure)
+                                    val res = ConnectivityTester.testCfProxyMulti(
+                                        domains = custom,
+                                        secure = secure,
+                                        dohProvider = doh,
+                                        ipPreference = ipPref,
+                                        cleanIpOverride = cleanIp,
+                                    )
                                     testDialogTitle = strings.testResultTitleCfProxy
                                     testDialogBody = formatMultiResults(res, secure, strings)
                                 } else {
-                                    val res = ConnectivityTester.testCfProxyAuto(CFPROXY_DEFAULT_DOMAINS, secure)
+                                    val autoPool = coerceDomainList(saved.cachedCfDomains)
+                                        .ifEmpty { CFPROXY_DEFAULT_DOMAINS }
+                                    val res = ConnectivityTester.testCfProxyAuto(
+                                        domains = autoPool,
+                                        secure = secure,
+                                        dohProvider = doh,
+                                        ipPreference = ipPref,
+                                        cleanIpOverride = cleanIp,
+                                    )
+                                    ProxyController.applyDiagnosticWinner(res.bestDomain, res.bestDomainLatencyMs)
                                     testDialogTitle = strings.testResultTitleCfProxy
                                     testDialogBody = formatAutoResults(res.bestDomain, res.perDc, secure, strings)
                                 }
@@ -545,7 +603,16 @@ fun SettingsScreen(strings: AppStrings) {
                         scope.launch {
                             try {
                                 val secure = !draft.disableSecure
-                                val res = ConnectivityTester.testCfWorkerMulti(workers, secure)
+                                val cleanIp = draft.cfCleanIp.trim().let {
+                                    if (DnsResolver.isValidIpAddress(it)) it else ""
+                                }
+                                val res = ConnectivityTester.testCfWorkerMulti(
+                                    domains = workers,
+                                    secure = secure,
+                                    dohProvider = draft.dohProvider,
+                                    ipPreference = draft.ipPreference,
+                                    cleanIpOverride = cleanIp,
+                                )
                                 testDialogTitle = strings.testResultTitleCfWorker
                                 testDialogBody = formatMultiResults(res, secure, strings)
                             } finally {
@@ -584,6 +651,50 @@ fun SettingsScreen(strings: AppStrings) {
                     subtitle = strings.disableTlsSubtitle,
                     checked = draft.disableSecure,
                     onCheckedChange = { draft = draft.copy(disableSecure = it) },
+                )
+                OutlinedTextField(
+                    value = draft.frontingSni,
+                    onValueChange = { draft = draft.copy(frontingSni = it) },
+                    label = {
+                        Text(
+                            text = strings.labelFrontingSni,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    placeholder = { Text(strings.hintFrontingSni) },
+                    singleLine = true,
+                    shape = fieldShape,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    text = strings.labelDohProvider,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = cs.onSurfaceVariant,
+                )
+                SegmentedChoiceBar(
+                    options = listOf(
+                        DnsResolver.DOH_SYSTEM to strings.dohSystem,
+                        DnsResolver.DOH_CLOUDFLARE to strings.dohCloudflare,
+                        DnsResolver.DOH_GOOGLE to strings.dohGoogle,
+                        DnsResolver.DOH_QUAD9 to strings.dohQuad9,
+                    ),
+                    selectedKey = draft.dohProvider,
+                    onSelect = { draft = draft.copy(dohProvider = it) },
+                )
+                Text(
+                    text = strings.labelIpPreference,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = cs.onSurfaceVariant,
+                )
+                SegmentedChoiceBar(
+                    options = listOf(
+                        DnsResolver.IP_PREF_AUTO to strings.ipPrefAuto,
+                        DnsResolver.IP_PREF_IPV4 to strings.ipPrefIpv4,
+                        DnsResolver.IP_PREF_IPV6 to strings.ipPrefIpv6,
+                    ),
+                    selectedKey = draft.ipPreference,
+                    onSelect = { draft = draft.copy(ipPreference = it) },
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1004,6 +1115,13 @@ private fun validateDraft(
     }
     val workers = coerceDomainList(draft.cfworkerDomains)
     if (workers.any { !isValidDomain(it.lowercase()) }) return strings.errInvalidCfDomains
+    val cleanIp = draft.cfCleanIp.trim()
+    if (cleanIp.isNotEmpty() && !DnsResolver.isValidIpAddress(cleanIp)) return strings.errInvalidCfCleanIp
+    val frontingRaw = draft.frontingSni.trim()
+    if (frontingRaw.isNotEmpty()) {
+        val snis = coerceDomainList(frontingRaw)
+        if (snis.isEmpty() || snis.any { !isValidDomain(it.lowercase()) }) return strings.errInvalidFrontingSni
+    }
     when (val res = parseDcIpRules(draft.dcIpRules)) {
         is DcParseResult.Error -> return when (res.kind) {
             DcParseResult.Error.Kind.FORMAT -> "${strings.errDcFormat}${res.entry}"

@@ -17,6 +17,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -74,6 +76,16 @@ object ProxyController {
     @Volatile
     private var lastNetworkChangeMs: Long = 0L
 
+    private val persistDomainsCallback: (List<String>) -> Unit = { domains ->
+        scope.launch {
+            runCatching {
+                if (::repository.isInitialized) {
+                    repository.saveCachedCfDomains(domains)
+                }
+            }
+        }
+    }
+
     fun init(context: Context) {
         if (::repository.isInitialized) return
         repository = SettingsRepository(context.applicationContext)
@@ -97,7 +109,7 @@ object ProxyController {
             _settings.value = current
             val cfg = current.toProxyConfig()
             withContext(Dispatchers.IO) {
-                server.start(cfg)
+                server.start(cfg, persistDomainsCallback)
             }
             repository.setWasRunning(true)
             _settings.value = current.copy(wasRunning = true)
@@ -135,7 +147,7 @@ object ProxyController {
             _settings.value = current
             val cfg = current.toProxyConfig()
             withContext(Dispatchers.IO) {
-                server.start(cfg)
+                server.start(cfg, persistDomainsCallback)
             }
             repository.setWasRunning(true)
             _settings.value = current.copy(wasRunning = true)
@@ -163,37 +175,83 @@ object ProxyController {
         lastNetworkChangeMs = now
         scope.launch(Dispatchers.IO) {
             runCatching {
-                ProxyLogger.i("Network changed, refreshing upstream pools")
                 server.onNetworkChanged()
             }
         }
+    }
+
+    fun onNetworkLost() {
+        if (!_isRunning.value) return
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                server.onNetworkLost()
+            }
+        }
+    }
+
+    fun setNetworkMetered(metered: Boolean) {
+        server.setNetworkMetered(metered)
+    }
+
+    fun applyDiagnosticWinner(domain: String?, latencyMs: Long?) {
+        if (domain.isNullOrBlank()) return
+        server.applyDiagnosticWinner(domain, latencyMs ?: 100L)
     }
 
     suspend fun updateSettings(
         restartIfRunning: Boolean = true,
         transform: (AppSettings) -> AppSettings,
     ) {
+        val previous = _settings.value
         val updated = repository.update(transform)
         _settings.value = updated
         ProxyLogger.setVerbose(updated.verboseLogging)
         if (restartIfRunning && _isRunning.value) {
-            restartProxy()
+            applyLiveOrRestart(previous, updated)
         }
     }
 
-    suspend fun saveSettings(settings: AppSettings, restartIfRunning: Boolean = true) {
+    /**
+     * Saves settings and applies them if the proxy is running.
+     * Returns true if a full restart was performed, false if hot-reloaded or proxy was stopped.
+     */
+    suspend fun saveSettings(settings: AppSettings, restartIfRunning: Boolean = true): Boolean {
+        val previous = _settings.value
         val toSave = settings.copy(wasRunning = _isRunning.value)
         repository.save(toSave)
         _settings.value = toSave
         ProxyLogger.setVerbose(toSave.verboseLogging)
         if (restartIfRunning && _isRunning.value) {
-            restartProxy()
+            return applyLiveOrRestart(previous, toSave)
         }
+        return false
+    }
+
+    private suspend fun applyLiveOrRestart(previous: AppSettings, updated: AppSettings): Boolean {
+        if (updated.hasSameBindConfigAs(previous)) {
+            opMutex.withLock {
+                if (!_isRunning.value) return false
+                val cfg = updated.toProxyConfig()
+                withContext(Dispatchers.IO) {
+                    server.updateConfig(cfg, persistDomainsCallback)
+                }
+                _currentConfig.value = cfg
+            }
+            return false
+        }
+        restartProxy()
+        return true
     }
 
     fun setDisableSecureAsync(enabled: Boolean) {
         scope.launch {
             updateSettings(restartIfRunning = true) { it.copy(disableSecure = enabled) }
+        }
+    }
+
+    fun setAutoPort80FallbackAsync(enabled: Boolean) {
+        scope.launch {
+            updateSettings(restartIfRunning = true) { it.copy(autoPort80Fallback = enabled) }
         }
     }
 
@@ -317,6 +375,25 @@ object ProxyController {
             }
 
             while (isActive && _isRunning.value) {
+                val hasSubscribers = _statsSnapshot.subscriptionCount.value > 0 ||
+                    _telemetry.subscriptionCount.value > 0 ||
+                    _uptimeSeconds.subscriptionCount.value > 0
+
+                if (!hasSubscribers) {
+                    // Sleep with zero CPU wakeups while the UI is in the background.
+                    combine(
+                        _statsSnapshot.subscriptionCount,
+                        _telemetry.subscriptionCount,
+                        _uptimeSeconds.subscriptionCount,
+                    ) { a, b, c -> a + b + c > 0 }.first { it }
+
+                    if (!isActive || !_isRunning.value) break
+                    val resetSnap = ProxyStats.snapshot()
+                    prevDown = resetSnap.bytesDown
+                    prevUp = resetSnap.bytesUp
+                    prevTimeMs = System.currentTimeMillis()
+                }
+
                 val nowMs = System.currentTimeMillis()
                 val snap = ProxyStats.snapshot()
                 _statsSnapshot.value = snap

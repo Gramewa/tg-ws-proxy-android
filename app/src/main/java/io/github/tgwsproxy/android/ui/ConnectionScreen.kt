@@ -627,9 +627,11 @@ private fun InlineRouteDiagnosticsItem(
             expanded = true
             probing = true
             scope.launch {
-                report = runCatching {
+                val res = runCatching {
                     ConnectivityTester.quickRouteCheck(effectiveConfig)
                 }.getOrNull()
+                report = res
+                ProxyController.applyDiagnosticWinner(res?.bestCfDomain, res?.bestCfLatencyMs)
                 probing = false
             }
         }

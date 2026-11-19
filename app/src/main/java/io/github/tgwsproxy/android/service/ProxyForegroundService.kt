@@ -5,11 +5,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -20,6 +24,7 @@ import androidx.core.content.ContextCompat
 import io.github.tgwsproxy.android.MainActivity
 import io.github.tgwsproxy.android.R
 import io.github.tgwsproxy.android.proxy.ProxyLogger
+import io.github.tgwsproxy.android.proxy.ProxyStats
 import io.github.tgwsproxy.android.proxy.buildTelegramProxyLink
 import io.github.tgwsproxy.android.proxy.humanBytes
 import kotlinx.coroutines.CoroutineScope
@@ -28,6 +33,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -61,15 +71,26 @@ class ProxyForegroundService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var notificationJob: Job? = null
+    private var lifecycleWatchJob: Job? = null
+    private var lockWatchJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private var activeNetworkHandle: Long? = null
+    private var screenReceiver: BroadcastReceiver? = null
+
+    private val screenInteractive = MutableStateFlow(true)
+
+    @Volatile private var activeNetworkHandle: Long? = null
+    @Volatile private var activeVpnTransport: Boolean? = null
+    @Volatile private var activeValidated: Boolean = true
+    @Volatile private var activeLinkSignature: String? = null
+    @Volatile private var networkLost: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
         ProxyController.init(applicationContext)
         createNotificationChannel()
+        registerScreenWatcher()
         registerNetworkWatcher()
     }
 
@@ -94,21 +115,98 @@ class ProxyForegroundService : Service() {
                 stopSelf()
                 return@launch
             }
-            updateLocks(ProxyController.settings.value.keepWakeLock)
+            startReactiveWatchers()
             startNotificationUpdater()
         }
         return START_STICKY
     }
 
+    private fun registerScreenWatcher() {
+        if (screenReceiver != null) return
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        screenInteractive.value = pm?.isInteractive ?: true
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_ON -> screenInteractive.value = true
+                    Intent.ACTION_SCREEN_OFF -> screenInteractive.value = false
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        runCatching {
+            ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+            screenReceiver = receiver
+        }
+    }
+
+    private fun unregisterScreenWatcher() {
+        val r = screenReceiver ?: return
+        screenReceiver = null
+        runCatching { unregisterReceiver(r) }
+    }
+
     private fun registerNetworkWatcher() {
         if (networkCallback != null) return
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val initialCaps = cm.activeNetwork?.let { runCatching { cm.getNetworkCapabilities(it) }.getOrNull() }
+        if (initialCaps != null) {
+            val metered = !initialCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+            ProxyController.setNetworkMetered(metered)
+            activeVpnTransport = initialCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            activeValidated = initialCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        }
+
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 val handle = network.networkHandle
                 val previous = activeNetworkHandle
+                val wasLost = networkLost
                 activeNetworkHandle = handle
-                if (previous != null && previous != handle) {
+                networkLost = false
+                if (wasLost || (previous != null && previous != handle)) {
+                    activeLinkSignature = null
+                    ProxyController.onNetworkChanged()
+                }
+            }
+
+            override fun onLost(network: Network) {
+                if (network.networkHandle == activeNetworkHandle) {
+                    networkLost = true
+                    ProxyController.onNetworkLost()
+                }
+            }
+
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                val metered = !networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+                ProxyController.setNetworkMetered(metered)
+
+                val vpn = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                val validated = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                val prevVpn = activeVpnTransport
+                val prevValidated = activeValidated
+                activeVpnTransport = vpn
+                activeValidated = validated
+
+                if ((prevVpn != null && prevVpn != vpn) || (!prevValidated && validated && networkLost)) {
+                    networkLost = false
+                    ProxyController.onNetworkChanged()
+                }
+            }
+
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                if (network.networkHandle != activeNetworkHandle) return
+                val addrs = linkProperties.linkAddresses
+                    .mapNotNull { it.address?.hostAddress }
+                    .sorted()
+                    .joinToString(",")
+                val sig = "${linkProperties.interfaceName.orEmpty()}:$addrs"
+                val prev = activeLinkSignature
+                activeLinkSignature = sig
+                if (prev != null && prev != sig) {
                     ProxyController.onNetworkChanged()
                 }
             }
@@ -125,6 +223,9 @@ class ProxyForegroundService : Service() {
         val cb = networkCallback ?: return
         networkCallback = null
         activeNetworkHandle = null
+        activeVpnTransport = null
+        activeLinkSignature = null
+        networkLost = false
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
         runCatching { cm.unregisterNetworkCallback(cb) }
     }
@@ -141,35 +242,59 @@ class ProxyForegroundService : Service() {
         }
     }
 
+    private fun startReactiveWatchers() {
+        if (lifecycleWatchJob?.isActive != true) {
+            lifecycleWatchJob = serviceScope.launch {
+                combine(
+                    ProxyController.isRunning,
+                    ProxyController.isTransitioning,
+                ) { running, transitioning -> running || transitioning }
+                    .collect { active ->
+                        if (!active) {
+                            releaseLocks()
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopSelf()
+                        }
+                    }
+            }
+        }
+        if (lockWatchJob?.isActive != true) {
+            lockWatchJob = serviceScope.launch {
+                ProxyController.settings
+                    .map { it.keepWakeLock }
+                    .distinctUntilChanged()
+                    .collect { keep ->
+                        updateLocks(keep)
+                    }
+            }
+        }
+    }
+
     private fun startNotificationUpdater() {
         if (notificationJob?.isActive == true) return
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         notificationJob = serviceScope.launch {
             var lastDigest = ""
-            while (isActive) {
-                if (!ProxyController.isRunning.value && !ProxyController.isTransitioning.value) {
-                    releaseLocks()
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                    break
+            screenInteractive.collectLatest { interactive ->
+                if (!interactive) {
+                    // Screen off / Doze: zero periodic notification wakeups.
+                    return@collectLatest
                 }
-                updateLocks(ProxyController.settings.value.keepWakeLock)
-                if (powerManager.isInteractive || lastDigest.isEmpty()) {
+                while (isActive) {
                     val (digest, notification) = buildNotificationPayload()
                     if (digest != lastDigest) {
                         lastDigest = digest
                         manager.notify(NOTIFICATION_ID, notification)
                     }
+                    delay(2500L)
                 }
-                delay(2500L)
             }
         }
     }
 
     private fun buildNotificationPayload(): Pair<String, Notification> {
         val cfg = ProxyController.currentConfig.value ?: ProxyController.settings.value.toProxyConfig()
-        val stats = ProxyController.statsSnapshot.value
+        val stats = ProxyStats.snapshot()
         val isRu = ProxyController.settings.value.language == "ru"
 
         val title = if (cfg.disableSecure) {
@@ -288,6 +413,9 @@ class ProxyForegroundService : Service() {
 
     override fun onDestroy() {
         notificationJob?.cancel()
+        lifecycleWatchJob?.cancel()
+        lockWatchJob?.cancel()
+        unregisterScreenWatcher()
         unregisterNetworkWatcher()
         releaseLocks()
         serviceScope.cancel()

@@ -393,4 +393,277 @@ class ProxyProtocolTest {
         assertNull(targetBase.applyImportedJson("""{"port":70000}"""))
         assertNull(targetBase.applyImportedJson("not-json"))
     }
+
+    @Test
+    fun aesCtrZeroAllocUpdateInPlaceAndUpdateIntoMatchUpdate() {
+        val key = ByteArray(32) { (it * 11 + 7).toByte() }
+        val iv = ByteArray(16) { (0xF0 + (it and 0x0F)).toByte() }
+        val totalLen = 70_000
+        val plain = ByteArray(totalLen) { ((it * 31 + 17) and 0xFF).toByte() }
+
+        val reference = AesCtr(key, iv).update(plain)
+
+        // Streaming updateInPlace with odd unaligned chunk sizes across >64KB
+        val inPlaceBuf = ByteArray(totalLen + 13)
+        System.arraycopy(plain, 0, inPlaceBuf, 5, totalLen)
+        val inPlaceCipher = AesCtr(key, iv)
+        val cuts = intArrayOf(1, 3, 15, 16, 17, 255, 4097, 65537)
+        var pos = 0
+        for (c in cuts) {
+            val take = minOf(c, totalLen - pos)
+            if (take <= 0) break
+            inPlaceCipher.updateInPlace(inPlaceBuf, 5 + pos, take)
+            pos += take
+        }
+        if (pos < totalLen) {
+            inPlaceCipher.updateInPlace(inPlaceBuf, 5 + pos, totalLen - pos)
+        }
+        assertArrayEquals(reference, inPlaceBuf.copyOfRange(5, 5 + totalLen))
+
+        // Streaming updateInto with non-zero srcOff and dstOff
+        val intoDst = ByteArray(totalLen + 11)
+        val intoCipher = AesCtr(key, iv)
+        intoCipher.updateInto(plain, 0, 12345, intoDst, 3)
+        intoCipher.updateInto(plain, 12345, totalLen - 12345, intoDst, 3 + 12345)
+        assertArrayEquals(reference, intoDst.copyOfRange(3, 3 + totalLen))
+
+        // Decrypt back in place
+        val dec = AesCtr(key, iv)
+        dec.updateInPlace(intoDst, 3, totalLen)
+        assertArrayEquals(plain, intoDst.copyOfRange(3, 3 + totalLen))
+    }
+
+    @Test
+    fun msgSplitterSliceFastPathCompactionAndLargePacketShrink() {
+        // Large intermediate packet (>256KB) split across multiple slices with non-zero offsets
+        val largePayloadLen = 300_000
+        val largePacket = ByteArray(4 + largePayloadLen) { 0x55 }
+        largePacket[0] = (largePayloadLen and 0xFF).toByte()
+        largePacket[1] = ((largePayloadLen ushr 8) and 0xFF).toByte()
+        largePacket[2] = ((largePayloadLen ushr 16) and 0xFF).toByte()
+        largePacket[3] = ((largePayloadLen ushr 24) and 0xFF).toByte()
+
+        val smallPacket = byteArrayOf(8, 0, 0, 0) + ByteArray(8) { 0x2A }
+        val combinedPlain = largePacket + smallPacket + smallPacket
+        val combinedCipher = combinedPlain.map { (it.toInt() xor 0x3C).toByte() }.toByteArray()
+
+        val paddedPlain = ByteArray(7) + combinedPlain + ByteArray(5)
+        val paddedCipher = ByteArray(11) + combinedCipher + ByteArray(9)
+
+        val splitter = MsgSplitter(HandshakeCrypto.PROTO_INTERMEDIATE_INT)
+        val collected = ArrayList<ByteArray>()
+        var offset = 0
+        val step = 13_000
+        while (offset < combinedPlain.size) {
+            val len = minOf(step, combinedPlain.size - offset)
+            collected.addAll(
+                splitter.split(
+                    chunk = paddedCipher,
+                    chunkOff = 11 + offset,
+                    plain = paddedPlain,
+                    plainOff = 7 + offset,
+                    len = len,
+                ),
+            )
+            offset += len
+        }
+
+        assertEquals(3, collected.size)
+        assertEquals(largePacket.size, collected[0].size)
+        assertEquals(smallPacket.size, collected[1].size)
+        assertEquals(smallPacket.size, collected[2].size)
+        assertArrayEquals(combinedCipher.copyOfRange(0, largePacket.size), collected[0])
+        assertTrue(splitter.flush().isEmpty())
+
+        // Fast-path two small packets in one call after shrink
+        val twoSmallPlain = smallPacket + smallPacket
+        val twoSmallCipher = twoSmallPlain.copyOf()
+        val fastParts = splitter.split(twoSmallCipher, 0, twoSmallPlain, 0, twoSmallPlain.size)
+        assertEquals(2, fastParts.size)
+        assertArrayEquals(smallPacket, fastParts[0])
+        assertArrayEquals(smallPacket, fastParts[1])
+    }
+
+    @Test
+    fun fakeTlsStreamSliceWriteAndMultiRecordRead() {
+        val payload = ByteArray(25_000) { ((it * 19 + 3) and 0xFF).toByte() }
+        val wireIn = byteArrayOf(0x14, 0x03, 0x03, 0x00, 0x01, 0x01) +
+            FakeTls.wrapTlsRecord(payload, 0, 10_000) +
+            FakeTls.wrapTlsRecord(payload, 10_000, payload.size - 10_000)
+
+        val outBuf = ByteArrayOutputStream()
+        val tlsStream = FakeTlsStream(
+            DataInputStream(ByteArrayInputStream(wireIn)),
+            outBuf,
+            Socket(),
+        )
+
+        val readOut = ByteArrayOutputStream()
+        val tmp = ByteArray(4096)
+        while (true) {
+            val n = tlsStream.read(tmp)
+            if (n <= 0) break
+            readOut.write(tmp, 0, n)
+        }
+        assertArrayEquals(payload, readOut.toByteArray())
+
+        // Slice write with non-zero offset spanning multiple TLS records (>16384 bytes)
+        val padded = ByteArray(9) + payload + ByteArray(6)
+        tlsStream.write(padded, 9, payload.size)
+        assertArrayEquals(FakeTls.wrapTlsRecord(payload, 0, payload.size), outBuf.toByteArray())
+    }
+
+    @Test
+    fun dnsResolverWireFormatIpValidationAndHappyEyeballsOrdering() {
+        assertTrue(DnsResolver.isValidIpAddress("104.16.132.229"))
+        assertTrue(DnsResolver.isValidIpAddress("2606:4700:4700::1111"))
+        assertTrue(DnsResolver.isValidIpAddress("[2606:4700::1111]"))
+        assertFalse(DnsResolver.isValidIpAddress(""))
+        assertFalse(DnsResolver.isValidIpAddress("999.1.2.3"))
+        assertFalse(DnsResolver.isValidIpAddress("example.com"))
+
+        // Query encoding check
+        val query = DnsResolver.buildDnsQuery("kws2.example.com", 1)
+        assertTrue(query.size > 12)
+        assertEquals(0x01, query[2].toInt() and 0xFF) // RD=1
+        assertEquals(1, ((query[4].toInt() and 0xFF) shl 8) or (query[5].toInt() and 0xFF)) // QDCOUNT=1
+        assertEquals(1, query[query.size - 3].toInt() and 0xFF) // QTYPE=A
+        assertEquals(1, query[query.size - 1].toInt() and 0xFF) // QCLASS=IN
+
+        // Synthetic DNS response with 1 question + compressed A (TTL 120) and AAAA (TTL 60) answers
+        val resp = ByteArrayOutputStream()
+        // Header: ID=0, Flags=0x8180 (QR=1, RD=1, RA=1, RCODE=0), QD=1, AN=2, NS=0, AR=0
+        resp.write(byteArrayOf(0x00, 0x00, 0x81.toByte(), 0x80.toByte(), 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00))
+        // Question: kws2.example.com (starts at offset 12), QTYPE=A, QCLASS=IN
+        resp.write(query, 12, query.size - 12)
+        // Answer 1: ptr 0xC00C, TYPE=A (1), CLASS=IN (1), TTL=120, RDLEN=4, 104.16.132.229
+        resp.write(byteArrayOf(0xC0.toByte(), 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 120, 0x00, 0x04))
+        resp.write(byteArrayOf(104, 16, 132.toByte(), 229.toByte()))
+        // Answer 2: ptr 0xC00C, TYPE=AAAA (28), CLASS=IN (1), TTL=60, RDLEN=16, 2606:4700:4700::1111
+        val v6Bytes = InetAddress.getByName("2606:4700:4700::1111").address
+        resp.write(byteArrayOf(0xC0.toByte(), 0x0C, 0x00, 0x1C, 0x00, 0x01, 0x00, 0x00, 0x00, 60, 0x00, 0x10))
+        resp.write(v6Bytes)
+
+        val (parsedAddrs, ttl) = DnsResolver.parseDnsResponse(resp.toByteArray())
+        assertEquals(2, parsedAddrs.size)
+        assertEquals("104.16.132.229", parsedAddrs[0].hostAddress)
+        assertArrayEquals(v6Bytes, parsedAddrs[1].address)
+        assertEquals(60L, ttl)
+
+        // NXDOMAIN (rcode=3) yields empty result
+        val nxPacket = resp.toByteArray().also { it[3] = (it[3].toInt() or 0x03).toByte() }
+        assertTrue(DnsResolver.parseDnsResponse(nxPacket).first.isEmpty())
+
+        // Happy Eyeballs ordering
+        val a1 = InetAddress.getByName("104.16.132.229")
+        val a2 = InetAddress.getByName("104.16.133.229")
+        val b1 = InetAddress.getByName("2606:4700:4700::1111")
+        val b2 = InetAddress.getByName("2606:4700:4700::1001")
+        val mixed = listOf(b1, a1, b2, a2, a1) // includes duplicate a1
+
+        val autoOrder = DnsResolver.orderByPreference(mixed, DnsResolver.IP_PREF_AUTO)
+        assertEquals(listOf(a1, b1, a2, b2), autoOrder)
+        assertEquals(listOf(a1, a2), DnsResolver.orderByPreference(mixed, DnsResolver.IP_PREF_IPV4))
+        assertEquals(listOf(b1, b2), DnsResolver.orderByPreference(mixed, DnsResolver.IP_PREF_IPV6))
+    }
+
+    @Test
+    fun domainBalancerEwmaCooldownPort80AndProbeWinner() {
+        val balancer = DomainBalancer()
+        balancer.updateDomainsList(listOf("slow.co.uk", "fast.co.uk", "mid.co.uk"))
+
+        val t0 = 1_000_000L
+        balancer.reportSuccess(dcId = 2, domain = "slow.co.uk", latencyMs = 450L, nowMs = t0)
+        balancer.reportSuccess(dcId = 4, domain = "mid.co.uk", latencyMs = 200L, nowMs = t0)
+        balancer.reportSuccess(dcId = 1, domain = "fast.co.uk", latencyMs = 70L, nowMs = t0)
+
+        // Unpinned DC3 should rank healthy measured domains by EWMA latency (fast < mid < slow)
+        balancer.updateDomainForDc(3, "fast.co.uk")
+        val orderDc3 = balancer.getDomainsForDc(3, nowMs = t0 + 100L)
+        assertEquals(listOf("fast.co.uk", "mid.co.uk", "slow.co.uk"), orderDc3)
+
+        // TLS-specific failure triggers port-80 preference without global cooldown
+        balancer.reportFailure("fast.co.uk", tlsSpecific = true, nowMs = t0 + 200L)
+        assertTrue(balancer.shouldPreferPort80("fast.co.uk", nowMs = t0 + 500L))
+        assertFalse(balancer.isDomainInCooldown("fast.co.uk", nowMs = t0 + 500L))
+
+        // Hard failure puts domain into cooldown and demotes it behind healthy domains
+        balancer.reportFailure("fast.co.uk", tlsSpecific = false, nowMs = t0 + 600L)
+        assertTrue(balancer.isDomainInCooldown("fast.co.uk", nowMs = t0 + 1000L))
+        val demotedOrder = balancer.getDomainsForDc(3, nowMs = t0 + 1000L)
+        assertEquals("fast.co.uk", demotedOrder.last())
+
+        // Diagnostic probe winner takes top slot across DCs
+        balancer.applyProbeWinner("winner.co.uk", latencyMs = 55L, nowMs = t0 + 2000L)
+        assertEquals("winner.co.uk", balancer.getDomainsForDc(2, nowMs = t0 + 2100L).first())
+        assertEquals("winner.co.uk", balancer.getDomainsForDc(4, nowMs = t0 + 2100L).first())
+
+        // Network change clears cooldowns and TLS port-80 flags
+        balancer.onNetworkChanged()
+        assertFalse(balancer.isDomainInCooldown("fast.co.uk", nowMs = t0 + 2200L))
+        assertFalse(balancer.shouldPreferPort80("fast.co.uk", nowMs = t0 + 2200L))
+    }
+
+    @Test
+    fun rawWebSocketAcceptHeaderMatchesRfc6455Vector() {
+        assertEquals(
+            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+            RawWebSocket.computeWebSocketAccept("dGhlIHNhbXBsZSBub25jZQ=="),
+        )
+    }
+
+    @Test
+    fun settingsV1CompatV2RoundTripAndHotReloadDiff() {
+        val base = io.github.tgwsproxy.android.data.AppSettings(
+            host = "127.0.0.1",
+            port = 1443,
+            secret = "0123456789abcdef0123456789abcdef",
+            autoPort80Fallback = false,
+            frontingSni = "cloudflare.com, apple.com",
+            dohProvider = DnsResolver.DOH_CLOUDFLARE,
+            cfCleanIp = "104.16.132.229",
+            ipPreference = DnsResolver.IP_PREF_IPV4,
+        )
+
+        // Hot-reload eligible changes keep hasSameBindConfigAs == true
+        val hotChanged = base.copy(
+            dohProvider = DnsResolver.DOH_QUAD9,
+            autoPort80Fallback = true,
+            cfCleanIp = "2606:4700::1111",
+            poolSize = 8,
+        )
+        assertTrue(hotChanged.hasSameBindConfigAs(base))
+        assertFalse(hotChanged.hasSameNetworkConfigAs(base))
+
+        // Bind-affecting change requires restart
+        assertFalse(base.copy(port = 2443).hasSameBindConfigAs(base))
+        assertFalse(base.copy(fakeTlsDomain = "example.com").hasSameBindConfigAs(base))
+
+        // V2 JSON roundtrip preserves all new v1.3.0 fields
+        val v2Json = base.toExportJson()
+        val importedV2 = io.github.tgwsproxy.android.data.AppSettings().applyImportedJson(v2Json)
+        assertNotNull(importedV2)
+        importedV2!!
+        assertTrue(importedV2.hasSameNetworkConfigAs(base))
+        assertFalse(importedV2.autoPort80Fallback)
+        assertEquals("cloudflare.com, apple.com", importedV2.frontingSni)
+        assertEquals(DnsResolver.DOH_CLOUDFLARE, importedV2.dohProvider)
+        assertEquals("104.16.132.229", importedV2.cfCleanIp)
+        assertEquals(DnsResolver.IP_PREF_IPV4, importedV2.ipPreference)
+
+        // V1 JSON (missing v1.3.0 keys) imports cleanly using defaults
+        val v1Json = """{"v":1,"host":"127.0.0.1","port":1443,"secret":"0123456789abcdef0123456789abcdef","bufferKb":256,"poolSize":4}"""
+        val importedV1 = io.github.tgwsproxy.android.data.AppSettings().applyImportedJson(v1Json)
+        assertNotNull(importedV1)
+        importedV1!!
+        assertTrue(importedV1.autoPort80Fallback)
+        assertEquals(DEFAULT_FRONTING_SNI, importedV1.frontingSni)
+        assertEquals(DnsResolver.DOH_SYSTEM, importedV1.dohProvider)
+        assertEquals("", importedV1.cfCleanIp)
+        assertEquals(DnsResolver.IP_PREF_AUTO, importedV1.ipPreference)
+
+        // Validation rejects malformed cfCleanIp and frontingSni
+        assertNull(base.applyImportedJson("""{"cfCleanIp":"not-an-ip"}"""))
+        assertNull(base.applyImportedJson("""{"frontingSni":"https://bad/host"}"""))
+    }
 }
