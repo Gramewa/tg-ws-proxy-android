@@ -33,6 +33,7 @@ import okhttp3.Response
 import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.IOException
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.UnknownHostException
@@ -204,19 +205,21 @@ class CfH2Pool(
         maxRequestsPerHost = 64
     }
 
-    private val dynamicDns = Dns { hostname ->
-        val cfg = configProvider()
-        try {
-            DnsResolver.resolve(
-                host = hostname,
-                dohProvider = cfg.dohProvider,
-                ipPreference = cfg.ipPreference,
-                cleanIpOverride = cfg.effectiveCfCleanIp,
-            )
-        } catch (e: UnknownHostException) {
-            throw e
-        } catch (e: Exception) {
-            throw UnknownHostException("H2 DNS lookup failed for $hostname: ${e.message}").apply { initCause(e) }
+    private val dynamicDns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            val cfg = configProvider()
+            return try {
+                DnsResolver.resolve(
+                    host = hostname,
+                    dohProvider = cfg.dohProvider,
+                    ipPreference = cfg.ipPreference,
+                    cleanIpOverride = cfg.effectiveCfCleanIp,
+                )
+            } catch (e: UnknownHostException) {
+                throw e
+            } catch (e: Exception) {
+                throw UnknownHostException("H2 DNS lookup failed for $hostname: ${e.message}").apply { initCause(e) }
+            }
         }
     }
 

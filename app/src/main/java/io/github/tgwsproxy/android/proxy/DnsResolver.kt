@@ -129,18 +129,20 @@ object DnsResolver {
         dohProvider: String,
         ipPreference: String,
         cleanIpOverride: String = "",
-    ): Dns = Dns { hostname ->
-        try {
-            resolve(
-                host = hostname,
-                dohProvider = dohProvider,
-                ipPreference = ipPreference,
-                cleanIpOverride = cleanIpOverride,
-            )
-        } catch (e: UnknownHostException) {
-            throw e
-        } catch (e: Exception) {
-            throw UnknownHostException("DNS lookup failed for $hostname: ${e.message}").apply { initCause(e) }
+    ): Dns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            return try {
+                resolve(
+                    host = hostname,
+                    dohProvider = dohProvider,
+                    ipPreference = ipPreference,
+                    cleanIpOverride = cleanIpOverride,
+                )
+            } catch (e: UnknownHostException) {
+                throw e
+            } catch (e: Exception) {
+                throw UnknownHostException("DNS lookup failed for $hostname: ${e.message}").apply { initCause(e) }
+            }
         }
     }
 
