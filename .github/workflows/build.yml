@@ -62,6 +62,9 @@ jobs:
           mkdir -p dist dist-debug
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             APK_NAME="tg-ws-proxy-android-${GITHUB_REF_NAME}.apk"
+          elif [[ "$GITHUB_REF" == refs/heads/release/v* ]]; then
+            VER="${GITHUB_REF#refs/heads/release/}"
+            APK_NAME="tg-ws-proxy-android-${VER}.apk"
           else
             APK_NAME="tg-ws-proxy-android-release.apk"
           fi
@@ -77,6 +80,24 @@ jobs:
           path: |
             dist/*
             dist-debug/*.apk
+
+      - name: Attach assets to private Draft Release (release/v* dispatch)
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/release/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/heads/release/}"
+          if gh release view "${TAG}" --json isDraft --jq '.isDraft' 2>/dev/null | grep -qx 'true'; then
+            gh release upload "${TAG}" dist/*.apk dist/SHA256SUMS.txt --clobber
+          else
+            gh release create "${TAG}" \
+              --draft \
+              --prerelease \
+              --target "${GITHUB_REF_NAME}" \
+              --title "TG WS Proxy Android ${TAG} (Private Test)" \
+              --generate-notes \
+              dist/*.apk dist/SHA256SUMS.txt
+          fi
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
