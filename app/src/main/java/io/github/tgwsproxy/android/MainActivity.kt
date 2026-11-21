@@ -44,7 +44,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
@@ -273,7 +272,9 @@ private fun VelvetTopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Row(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -294,16 +295,18 @@ private fun VelvetTopBar(
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (hasUpdate) {
                 Surface(
-                    onClick = onOpenUpdate,
                     shape = RoundedCornerShape(12.dp),
                     color = velvet.liveGreenSoft,
+                    border = rememberRimBorder(velvet.liveGreen.copy(alpha = 0.28f)),
                 ) {
                     Box(
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clickable(onClick = onOpenUpdate),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
@@ -323,19 +326,24 @@ private fun VelvetTopBar(
                 onSelect = onSelectMode,
             )
 
-            IconButton(
-                onClick = onOpenAppearance,
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(velvet.card),
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = velvet.card,
+                border = rememberRimBorder(velvet.rim),
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Tune,
-                    contentDescription = appearanceDesc,
-                    tint = cs.onSurfaceVariant,
-                    modifier = Modifier.size(19.dp),
-                )
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clickable(onClick = onOpenAppearance),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Tune,
+                        contentDescription = appearanceDesc,
+                        tint = cs.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
             }
         }
     }
@@ -654,7 +662,7 @@ private fun InterfaceModePill(
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     Surface(
-        modifier = modifier,
+        modifier = modifier.height(36.dp),
         shape = RoundedCornerShape(12.dp),
         color = velvet.card,
         contentColor = cs.onSurface,
@@ -709,10 +717,11 @@ private fun ModeSegment(
     )
     Box(
         modifier = Modifier
+            .height(30.dp)
             .clip(RoundedCornerShape(9.dp))
             .background(bg)
             .clickable(onClick = onClick)
-            .padding(horizontal = 11.dp, vertical = 6.dp),
+            .padding(horizontal = 11.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(

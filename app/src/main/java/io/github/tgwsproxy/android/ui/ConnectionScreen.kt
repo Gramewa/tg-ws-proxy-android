@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -59,7 +60,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -167,8 +167,9 @@ fun ConnectionScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
+            .then(if (settings.simpleMode) Modifier.navigationBarsPadding() else Modifier)
             .padding(horizontal = 16.dp)
-            .padding(top = 6.dp, bottom = if (settings.simpleMode) 28.dp else 16.dp),
+            .padding(top = 6.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         SculptedHeroCard(
@@ -530,13 +531,14 @@ private fun PrimaryActionsStack(
                         color = cs.onSurfaceVariant,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    IconButton(
-                        onClick = onCopyLink,
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
                         modifier = Modifier
                             .size(36.dp)
                             .clip(RoundedCornerShape(11.dp))
-                            .background(velvet.cardSub),
+                            .background(velvet.cardSub)
+                            .clickable(onClick = onCopyLink),
+                        contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.ContentCopy,
@@ -545,12 +547,13 @@ private fun PrimaryActionsStack(
                             modifier = Modifier.size(17.dp),
                         )
                     }
-                    IconButton(
-                        onClick = onShareLink,
+                    Box(
                         modifier = Modifier
                             .size(36.dp)
                             .clip(RoundedCornerShape(11.dp))
-                            .background(velvet.cardSub),
+                            .background(velvet.cardSub)
+                            .clickable(onClick = onShareLink),
+                        contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Share,
@@ -588,16 +591,19 @@ private fun PrimaryActionsStack(
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .padding(end = 12.dp),
+                            .padding(end = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             Text(
                                 text = strings.fallbackPortTitle,
                                 style = MaterialTheme.typography.titleSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
                             )
                             if (settings.disableSecure) {
                                 Surface(
@@ -608,6 +614,8 @@ private fun PrimaryActionsStack(
                                         text = strings.fallbackPortBadge,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = velvet.liveGreen,
+                                        maxLines = 1,
+                                        softWrap = false,
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                     )
                                 }
@@ -1176,46 +1184,52 @@ private fun KeyMismatchCard(
         rimColor = velvet.warning.copy(alpha = 0.28f),
         shape = RoundedCornerShape(22.dp),
     ) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            VelvetIconBadge(
-                containerColor = velvet.warning.copy(alpha = 0.20f),
-                contentColor = velvet.warning,
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.KeyOff,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(end = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    text = strings.keyMismatchTitle,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = cs.onSurface,
-                )
-                Text(
-                    text = strings.keyMismatchBody,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = cs.onSurfaceVariant,
-                )
+                VelvetIconBadge(
+                    containerColor = velvet.warning.copy(alpha = 0.20f),
+                    contentColor = velvet.warning,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.KeyOff,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = strings.keyMismatchTitle,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = cs.onSurface,
+                    )
+                    Text(
+                        text = strings.keyMismatchBody,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = cs.onSurfaceVariant,
+                    )
+                }
             }
             FilledTonalButton(
                 onClick = onSyncTelegram,
                 shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
                     text = strings.keyMismatchAction,
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -1251,9 +1265,13 @@ private fun ErrorAlertCard(
                 color = cs.onErrorContainer,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier.size(32.dp),
+            Spacer(Modifier.width(6.dp))
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .clickable(onClick = onDismiss),
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
@@ -1277,45 +1295,51 @@ private fun BatteryPromptCard(
     VelvetCard(
         shape = RoundedCornerShape(22.dp),
     ) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            VelvetIconBadge(
-                containerColor = velvet.cardSub,
-                contentColor = cs.onSurfaceVariant,
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.BatteryChargingFull,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Spacer(Modifier.width(13.dp))
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(end = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    text = strings.batteryTitle,
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
-                    text = strings.batteryBody,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = cs.onSurfaceVariant,
-                )
+                VelvetIconBadge(
+                    containerColor = velvet.cardSub,
+                    contentColor = cs.onSurfaceVariant,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.BatteryChargingFull,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Spacer(Modifier.width(13.dp))
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = strings.batteryTitle,
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        text = strings.batteryBody,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = cs.onSurfaceVariant,
+                    )
+                }
             }
             FilledTonalButton(
                 onClick = onRequestExemption,
                 shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
                     text = strings.batteryAction,
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

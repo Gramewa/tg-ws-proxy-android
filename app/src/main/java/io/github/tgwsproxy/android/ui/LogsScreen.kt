@@ -385,13 +385,14 @@ private fun LogActionIconButton(
     val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
     Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(13.dp),
+        shape = RoundedCornerShape(12.dp),
         color = velvet.card,
         border = rememberRimBorder(velvet.rim),
     ) {
         Box(
-            modifier = Modifier.size(44.dp),
+            modifier = Modifier
+                .size(44.dp)
+                .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
