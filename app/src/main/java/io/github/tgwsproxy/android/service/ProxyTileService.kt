@@ -3,12 +3,15 @@ package io.github.tgwsproxy.android.service
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import io.github.tgwsproxy.android.proxy.ActiveRoute
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 class ProxyTileService : TileService() {
@@ -25,10 +28,11 @@ class ProxyTileService : TileService() {
                 ProxyController.isRunning,
                 ProxyController.isTransitioning,
                 ProxyController.currentConfig,
-            ) { running, transitioning, _ ->
-                running to transitioning
-            }.collect { (running, transitioning) ->
-                updateTile(running = running, transitioning = transitioning)
+                ProxyController.statsSnapshot.map { it.activeRoute }.distinctUntilChanged(),
+            ) { running, transitioning, _, route ->
+                Triple(running, transitioning, route)
+            }.collect { (running, transitioning, route) ->
+                updateTile(running = running, transitioning = transitioning, activeRoute = route)
             }
         }
     }
@@ -54,7 +58,11 @@ class ProxyTileService : TileService() {
         }
     }
 
-    private fun updateTile(running: Boolean, transitioning: Boolean) {
+    private fun updateTile(
+        running: Boolean,
+        transitioning: Boolean,
+        activeRoute: ActiveRoute = ProxyController.statsSnapshot.value.activeRoute,
+    ) {
         val tile = qsTile ?: return
         tile.state = when {
             transitioning -> Tile.STATE_UNAVAILABLE
@@ -66,7 +74,12 @@ class ProxyTileService : TileService() {
             val isRu = cfg.language == "ru"
             tile.subtitle = when {
                 transitioning -> if (isRu) "Подождите…" else "Starting…"
-                running -> if (cfg.disableSecure) ":${cfg.port} · HTTP 80" else ":${cfg.port}"
+                running -> when {
+                    cfg.disableSecure && cfg.cfproxyEnabled -> ":${cfg.port} · HTTP :80"
+                    activeRoute == ActiveRoute.CF_HTTP80_AUTO ->
+                        if (isRu) ":${cfg.port} · Авто :80" else ":${cfg.port} · Auto :80"
+                    else -> ":${cfg.port}"
+                }
                 else -> null
             }
         }

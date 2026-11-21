@@ -639,7 +639,7 @@ class ProxyProtocolTest {
         assertFalse(base.copy(port = 2443).hasSameBindConfigAs(base))
         assertFalse(base.copy(fakeTlsDomain = "example.com").hasSameBindConfigAs(base))
 
-        // V2 JSON roundtrip preserves all new v1.3.0 fields
+        // V2 JSON roundtrip preserves all new v1.2.2 fields
         val v2Json = base.toExportJson()
         val importedV2 = io.github.tgwsproxy.android.data.AppSettings().applyImportedJson(v2Json)
         assertNotNull(importedV2)
@@ -651,7 +651,7 @@ class ProxyProtocolTest {
         assertEquals("104.16.132.229", importedV2.cfCleanIp)
         assertEquals(DnsResolver.IP_PREF_IPV4, importedV2.ipPreference)
 
-        // V1 JSON (missing v1.3.0 keys) imports cleanly using defaults
+        // V1 JSON (from v1.2.1, missing v1.2.2 keys) imports cleanly using defaults
         val v1Json = """{"v":1,"host":"127.0.0.1","port":1443,"secret":"0123456789abcdef0123456789abcdef","bufferKb":256,"poolSize":4}"""
         val importedV1 = io.github.tgwsproxy.android.data.AppSettings().applyImportedJson(v1Json)
         assertNotNull(importedV1)
@@ -661,6 +661,10 @@ class ProxyProtocolTest {
         assertEquals(DnsResolver.DOH_SYSTEM, importedV1.dohProvider)
         assertEquals("", importedV1.cfCleanIp)
         assertEquals(DnsResolver.IP_PREF_AUTO, importedV1.ipPreference)
+
+        // Built-in updater recognizes v1.2.2 as newer than v1.2.1
+        assertTrue(AppUpdater.isNewerVersion("1.2.1", "v1.2.2"))
+        assertFalse(AppUpdater.isNewerVersion("1.2.2", "v1.2.2"))
 
         // Validation rejects malformed cfCleanIp and frontingSni
         assertNull(base.applyImportedJson("""{"cfCleanIp":"not-an-ip"}"""))
