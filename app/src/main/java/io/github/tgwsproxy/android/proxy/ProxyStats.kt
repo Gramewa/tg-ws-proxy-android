@@ -2,6 +2,18 @@ package io.github.tgwsproxy.android.proxy
 
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
+
+enum class ActiveRoute {
+    NONE,
+    DIRECT_WS,
+    CF_H2,
+    CF_TLS,
+    CF_HTTP80,
+    CF_HTTP80_AUTO,
+    CF_WORKER,
+    TCP_FALLBACK,
+}
 
 data class StatsSnapshot(
     val connectionsTotal: Long = 0,
@@ -23,6 +35,7 @@ data class StatsSnapshot(
     val poolMisses: Long = 0,
     val cfPoolHits: Long = 0,
     val cfPoolMisses: Long = 0,
+    val activeRoute: ActiveRoute = ActiveRoute.NONE,
 ) {
     fun summary(): String {
         val poolTotal = poolHits + poolMisses
@@ -44,6 +57,7 @@ data class StatsSnapshot(
             "err=$wsErrors " +
             "pool=$poolStr " +
             "cf_pool=$cfPoolStr " +
+            "route=${activeRoute.name.lowercase(Locale.US)} " +
             "up=${humanBytes(bytesUp)} " +
             "down=${humanBytes(bytesDown)}"
     }
@@ -81,6 +95,20 @@ object ProxyStats {
     val poolMisses = AtomicLong(0)
     val cfPoolHits = AtomicLong(0)
     val cfPoolMisses = AtomicLong(0)
+    val activeRoute = AtomicReference(ActiveRoute.NONE)
+
+    @Volatile
+    var onActiveRouteChanged: ((ActiveRoute) -> Unit)? = null
+
+    fun setActiveRoute(route: ActiveRoute) {
+        if (activeRoute.getAndSet(route) != route) {
+            onActiveRouteChanged?.invoke(route)
+        }
+    }
+
+    fun clearActiveRoute() {
+        setActiveRoute(ActiveRoute.NONE)
+    }
 
     fun snapshot(): StatsSnapshot = StatsSnapshot(
         connectionsTotal = connectionsTotal.get(),
@@ -102,6 +130,7 @@ object ProxyStats {
         poolMisses = poolMisses.get(),
         cfPoolHits = cfPoolHits.get(),
         cfPoolMisses = cfPoolMisses.get(),
+        activeRoute = activeRoute.get(),
     )
 
     fun summary(): String = snapshot().summary()
@@ -126,5 +155,6 @@ object ProxyStats {
         poolMisses.set(0)
         cfPoolHits.set(0)
         cfPoolMisses.set(0)
+        clearActiveRoute()
     }
 }

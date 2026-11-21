@@ -19,6 +19,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.coroutineContext
@@ -86,13 +87,16 @@ class FakeTlsClientStream(
 object ProxyBridge {
     private const val TCP_BACKOFF_INITIAL_MS = 30_000L
     private const val TCP_BACKOFF_MAX_MS = 3_600_000L
-    private const val CF_RACE_STAGGER_MS = 1_200L
+    private const val CF_RACE_STAGGER_MS = 1_000L
+    private const val AUTO_P80_STAGGER_MS = 750L
+    private const val CF_TLS_TIMEOUT_MS = 4_500
+    private const val CF_HTTP80_TIMEOUT_MS = 4_500
     private const val WS_HEARTBEAT_IDLE_MS = 25_000L
     private const val WS_HEARTBEAT_PONG_TIMEOUT_MS = 10_000L
 
     private data class TcpEndpoint(val dst: String, val port: Int)
 
-    private data class CfConnectWinner(
+    internal data class CfConnectWinner(
         val ws: RawWebSocket,
         val baseDomain: String,
         val usedPort80: Boolean,
@@ -166,6 +170,7 @@ object ProxyBridge {
                         if (channel != null) {
                             ProxyStats.connectionsH2.incrementAndGet()
                             ProxyStats.connectionsCfproxy.incrementAndGet()
+                            ProxyStats.setActiveRoute(ActiveRoute.CF_H2)
                             h2Pool.bridgeH2(stream, channel, ctx, protoTag)
                             return true
                         }
@@ -274,6 +279,7 @@ object ProxyBridge {
 
         val readyWs = ws ?: return false
         ProxyStats.connectionsCfproxy.incrementAndGet()
+        ProxyStats.setActiveRoute(ActiveRoute.CF_WORKER)
         bridgeWsReencrypt(
             stream = stream,
             ws = readyWs,
@@ -306,12 +312,19 @@ object ProxyBridge {
         val pooled = cfProxyPool?.get(dc)
         if (pooled != null) {
             try {
-                pooled.first.send(relayInit)
-                ProxyLogger.i("[$label] DC$dc$mediaTag -> CF proxy pool hit")
+                pooled.ws.send(relayInit)
+                val routeTag = if (pooled.usedPort80) "cf-p80" else "cf"
+                val liveRoute = when {
+                    config.disableSecure -> ActiveRoute.CF_HTTP80
+                    pooled.usedPort80 -> ActiveRoute.CF_HTTP80_AUTO
+                    else -> ActiveRoute.CF_TLS
+                }
+                ProxyLogger.i("[$label] DC$dc$mediaTag -> CF proxy pool hit ($routeTag)")
                 ProxyStats.connectionsCfproxy.incrementAndGet()
+                ProxyStats.setActiveRoute(liveRoute)
                 bridgeWsReencrypt(
                     stream = stream,
-                    ws = pooled.first,
+                    ws = pooled.ws,
                     label = label,
                     ctx = ctx,
                     dc = dc,
@@ -321,16 +334,17 @@ object ProxyBridge {
                 )
                 return true
             } catch (e: CancellationException) {
-                pooled.first.closeQuietly()
+                pooled.ws.closeQuietly()
                 throw e
             } catch (exc: Exception) {
-                pooled.first.closeQuietly()
+                pooled.ws.closeQuietly()
                 ProxyLogger.d("[$label] Stale CF proxy pooled socket for DC$dc (${exc.message}), racing fresh")
             }
         }
 
         val modeDesc = when {
             config.disableSecure -> "port 80"
+            config.autoPort80Fallback && balancer.isCfTlsBlocked() -> "auto port 80"
             config.autoPort80Fallback -> "TLS 443 / auto :80"
             else -> "TLS 443"
         }
@@ -362,12 +376,18 @@ object ProxyBridge {
 
         val setupMs = System.currentTimeMillis() - connectStarted
         val routeTag = if (winner.usedPort80) "cf-p80" else "cf"
+        val liveRoute = when {
+            winner.usedPort80 && config.disableSecure -> ActiveRoute.CF_HTTP80
+            winner.usedPort80 -> ActiveRoute.CF_HTTP80_AUTO
+            else -> ActiveRoute.CF_TLS
+        }
         ProxyLogger.d("[$label] WS CONNECT DC$dc$mediaTag route=$routeTag setup_ms=$setupMs")
         if (balancer.reportSuccess(dc, winner.baseDomain, winner.rttMs, usedPort80 = winner.usedPort80)) {
             ProxyLogger.i("[$label] Switched active CF domain (rtt=${winner.rttMs}ms, $routeTag)")
         }
 
         ProxyStats.connectionsCfproxy.incrementAndGet()
+        ProxyStats.setActiveRoute(liveRoute)
         try {
             winner.ws.send(relayInit)
         } catch (exc: Exception) {
@@ -454,7 +474,7 @@ object ProxyBridge {
         }
     }
 
-    private suspend fun connectSingleCfDomain(
+    internal suspend fun connectSingleCfDomain(
         dc: Int,
         baseDomain: String,
         config: ProxyConfig,
@@ -464,48 +484,232 @@ object ProxyBridge {
     ): CfConnectWinner? {
         val domain = "kws$dc.$baseDomain"
         val cleanIp = config.effectiveCfCleanIp
-        val preferPort80 = config.disableSecure ||
-            (config.autoPort80Fallback && balancer.shouldPreferPort80(baseDomain))
-        val portPlan = when {
-            config.disableSecure -> listOf(false)
-            preferPort80 -> listOf(false, true)
-            config.autoPort80Fallback -> listOf(true, false)
-            else -> listOf(true)
+
+        // Direct port 80 (manual override) or TLS-only (auto-fallback disabled)
+        if (config.disableSecure || !config.autoPort80Fallback) {
+            val secure = !config.disableSecure
+            val winner = connectSinglePort(
+                dc = dc,
+                baseDomain = baseDomain,
+                domain = domain,
+                cleanIp = cleanIp,
+                secure = secure,
+                config = config,
+                label = label,
+                mediaTag = mediaTag,
+            )
+            if (winner == null) {
+                balancer.reportFailure(baseDomain, tlsSpecific = false)
+            }
+            return winner
         }
 
-        var tlsFailed = false
-        for (secure in portPlan) {
-            val started = System.currentTimeMillis()
-            try {
-                val ws = RawWebSocket.connect(
-                    host = domain,
-                    domain = domain,
-                    timeoutMs = if (secure) 6_000 else 5_500,
-                    path = WS_PATH,
-                    secure = secure,
-                    bufferSize = config.bufferSize,
-                    dohProvider = config.dohProvider,
-                    ipPreference = config.ipPreference,
-                    cleanIpOverride = cleanIp,
-                )
-                val rtt = (System.currentTimeMillis() - started).coerceAtLeast(1L)
-                if (tlsFailed && !secure) {
-                    balancer.reportFailure(baseDomain, tlsSpecific = true)
-                    ProxyLogger.i("[$label] DC$dc$mediaTag auto port-80 fallback succeeded (rtt=${rtt}ms)")
-                }
-                return CfConnectWinner(ws, baseDomain, usedPort80 = !secure, rttMs = rtt)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (exc: Exception) {
-                if (secure) tlsFailed = true
-                ProxyLogger.w(
-                    "[$label] DC$dc$mediaTag CF proxy (${if (secure) "443" else "80"}) failed: " +
-                        "${exc.javaClass.simpleName}: ${exc.message}"
-                )
-            }
+        // TLS :443 already known blocked on this network/domain -> go straight to HTTP :80 in 0ms.
+        if (balancer.shouldPreferPort80(baseDomain)) {
+            val http80 = connectSinglePort(
+                dc = dc,
+                baseDomain = baseDomain,
+                domain = domain,
+                cleanIp = cleanIp,
+                secure = false,
+                config = config,
+                label = label,
+                mediaTag = mediaTag,
+            )
+            if (http80 != null) return http80
+
+            // Port 80 failed too; probe TLS :443 once before cooling down the domain.
+            val tls443 = connectSinglePort(
+                dc = dc,
+                baseDomain = baseDomain,
+                domain = domain,
+                cleanIp = cleanIp,
+                secure = true,
+                config = config,
+                label = label,
+                mediaTag = mediaTag,
+            )
+            if (tls443 != null) return tls443
+
+            balancer.reportFailure(baseDomain, tlsSpecific = false)
+            return null
         }
-        balancer.reportFailure(baseDomain, tlsSpecific = false)
-        return null
+
+        // Unknown TLS status with autoPort80Fallback: stagger-race TLS :443 vs HTTP :80.
+        return raceTlsAndPort80(
+            dc = dc,
+            baseDomain = baseDomain,
+            domain = domain,
+            cleanIp = cleanIp,
+            config = config,
+            balancer = balancer,
+            label = label,
+            mediaTag = mediaTag,
+        )
+    }
+
+    private suspend fun connectSinglePort(
+        dc: Int,
+        baseDomain: String,
+        domain: String,
+        cleanIp: String,
+        secure: Boolean,
+        config: ProxyConfig,
+        label: String,
+        mediaTag: String,
+    ): CfConnectWinner? {
+        val started = System.currentTimeMillis()
+        return try {
+            val ws = RawWebSocket.connect(
+                host = domain,
+                domain = domain,
+                timeoutMs = if (secure) CF_TLS_TIMEOUT_MS else CF_HTTP80_TIMEOUT_MS,
+                path = WS_PATH,
+                secure = secure,
+                bufferSize = config.bufferSize,
+                dohProvider = config.dohProvider,
+                ipPreference = config.ipPreference,
+                cleanIpOverride = cleanIp,
+            )
+            val rtt = (System.currentTimeMillis() - started).coerceAtLeast(1L)
+            CfConnectWinner(ws, baseDomain, usedPort80 = !secure, rttMs = rtt)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (exc: Exception) {
+            ProxyLogger.w(
+                "[$label] DC$dc$mediaTag CF proxy (${if (secure) "443" else "80"}) failed: " +
+                    "${exc.javaClass.simpleName}: ${exc.message}"
+            )
+            null
+        }
+    }
+
+    private suspend fun raceTlsAndPort80(
+        dc: Int,
+        baseDomain: String,
+        domain: String,
+        cleanIp: String,
+        config: ProxyConfig,
+        balancer: DomainBalancer,
+        label: String,
+        mediaTag: String,
+    ): CfConnectWinner? {
+        val winnerRef = AtomicReference<CfConnectWinner?>(null)
+        val done = CompletableDeferred<CfConnectWinner?>()
+        val tlsFailedSignal = Channel<Unit>(Channel.CONFLATED)
+        val tlsFailedFlag = AtomicBoolean(false)
+        val remaining = AtomicInteger(2)
+
+        return coroutineScope {
+            val tlsJob = launch(Dispatchers.IO) {
+                val started = System.currentTimeMillis()
+                try {
+                    val ws = RawWebSocket.connect(
+                        host = domain,
+                        domain = domain,
+                        timeoutMs = CF_TLS_TIMEOUT_MS,
+                        path = WS_PATH,
+                        secure = true,
+                        bufferSize = config.bufferSize,
+                        dohProvider = config.dohProvider,
+                        ipPreference = config.ipPreference,
+                        cleanIpOverride = cleanIp,
+                    )
+                    val rtt = (System.currentTimeMillis() - started).coerceAtLeast(1L)
+                    val win = CfConnectWinner(ws, baseDomain, usedPort80 = false, rttMs = rtt)
+                    if (winnerRef.compareAndSet(null, win)) {
+                        if (!done.complete(win)) {
+                            ws.closeQuietly()
+                        }
+                    } else {
+                        ws.closeQuietly()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (exc: Exception) {
+                    if (!isActive || winnerRef.get() != null) return@launch
+                    tlsFailedFlag.set(true)
+                    ProxyLogger.w(
+                        "[$label] DC$dc$mediaTag CF proxy (443) failed: ${exc.javaClass.simpleName}: ${exc.message}"
+                    )
+                    tlsFailedSignal.trySend(Unit)
+                    if (remaining.decrementAndGet() == 0) {
+                        done.complete(null)
+                    }
+                }
+            }
+
+            val http80Job = launch(Dispatchers.IO) {
+                // Give TLS :443 a brief head start; wake immediately if :443 fails early.
+                withTimeoutOrNull(AUTO_P80_STAGGER_MS) {
+                    tlsFailedSignal.receive()
+                }
+                if (winnerRef.get() != null || !isActive) {
+                    if (remaining.decrementAndGet() == 0) {
+                        done.complete(null)
+                    }
+                    return@launch
+                }
+                val started = System.currentTimeMillis()
+                try {
+                    val ws = RawWebSocket.connect(
+                        host = domain,
+                        domain = domain,
+                        timeoutMs = CF_HTTP80_TIMEOUT_MS,
+                        path = WS_PATH,
+                        secure = false,
+                        bufferSize = config.bufferSize,
+                        dohProvider = config.dohProvider,
+                        ipPreference = config.ipPreference,
+                        cleanIpOverride = cleanIp,
+                    )
+                    val rtt = (System.currentTimeMillis() - started).coerceAtLeast(1L)
+                    val win = CfConnectWinner(ws, baseDomain, usedPort80 = true, rttMs = rtt)
+                    if (winnerRef.compareAndSet(null, win)) {
+                        if (!done.complete(win)) {
+                            ws.closeQuietly()
+                        }
+                    } else {
+                        ws.closeQuietly()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (exc: Exception) {
+                    if (!isActive || winnerRef.get() != null) return@launch
+                    ProxyLogger.w(
+                        "[$label] DC$dc$mediaTag CF proxy (80) failed: ${exc.javaClass.simpleName}: ${exc.message}"
+                    )
+                    if (remaining.decrementAndGet() == 0) {
+                        done.complete(null)
+                    }
+                }
+            }
+
+            val winner = try {
+                done.await()
+            } catch (e: CancellationException) {
+                done.cancel()
+                tlsJob.cancel()
+                http80Job.cancel()
+                tlsFailedSignal.close()
+                winnerRef.getAndSet(null)?.ws?.closeQuietly()
+                throw e
+            }
+            tlsJob.cancel()
+            http80Job.cancel()
+            tlsFailedSignal.close()
+
+            if (winner != null && winner.usedPort80) {
+                balancer.reportFailure(baseDomain, tlsSpecific = true)
+                val reason = if (tlsFailedFlag.get()) "TLS failed" else "TLS stalled"
+                ProxyLogger.i(
+                    "[$label] DC$dc$mediaTag auto port-80 switch succeeded ($reason, rtt=${winner.rttMs}ms)"
+                )
+            } else if (winner == null) {
+                balancer.reportFailure(baseDomain, tlsSpecific = false)
+            }
+            winner
+        }
     }
 
     private suspend fun tcpFallback(
@@ -564,6 +768,7 @@ object ProxyBridge {
             tcpFailures.remove(key)
             tcpRetryAfterMs.remove(key)
             ProxyStats.connectionsTcpFallback.incrementAndGet()
+            ProxyStats.setActiveRoute(ActiveRoute.TCP_FALLBACK)
             bridgeTcpReencrypt(stream, remote, label, ctx, relayDispatcher)
             true
         } finally {

@@ -747,6 +747,7 @@ fun LiveRouteStrip(
     localEndpoint: String,
     upstreamLabel: String,
     isRunning: Boolean,
+    useLiveGreenUpstream: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val velvet = MaterialTheme.velvet
@@ -810,6 +811,7 @@ fun LiveRouteStrip(
                 text = upstreamLabel,
                 active = isRunning,
                 accent = isRunning,
+                liveGreen = isRunning && useLiveGreenUpstream,
             )
         }
     }
@@ -821,15 +823,18 @@ private fun RouteNodeTag(
     active: Boolean,
     accent: Boolean,
     mono: Boolean = false,
+    liveGreen: Boolean = false,
 ) {
     val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
     val bg = when {
+        liveGreen && active -> velvet.liveGreenSoft
         accent && active -> velvet.accentSoft
         active -> velvet.card.copy(alpha = if (velvet.isDark) 0.70f else 0.90f)
         else -> Color.Transparent
     }
     val fg = when {
+        liveGreen && active -> velvet.liveGreen
         accent && active -> velvet.accent
         active -> cs.onSurface
         else -> cs.onSurfaceVariant
@@ -844,10 +849,11 @@ private fun RouteNodeTag(
             text = text,
             style = MaterialTheme.typography.labelSmall.copy(
                 fontFamily = if (mono) FontFamily.Monospace else FontFamily.SansSerif,
-                fontWeight = if (accent) FontWeight.Bold else FontWeight.Medium,
+                fontWeight = if (accent || liveGreen) FontWeight.Bold else FontWeight.Medium,
             ),
             color = fg,
             maxLines = 1,
+            softWrap = false,
             overflow = TextOverflow.Ellipsis,
         )
     }

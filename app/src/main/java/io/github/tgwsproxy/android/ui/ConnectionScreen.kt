@@ -87,6 +87,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.tgwsproxy.android.data.AppSettings
+import io.github.tgwsproxy.android.proxy.ActiveRoute
 import io.github.tgwsproxy.android.proxy.ConnectivityTester
 import io.github.tgwsproxy.android.proxy.DcConnectivityStatus
 import io.github.tgwsproxy.android.proxy.ProxyConfig
@@ -201,11 +202,16 @@ fun ConnectionScreen(
             )
         }
 
+        val isAutoPort80Active = isRunning &&
+            !settings.disableSecure &&
+            stats.activeRoute == ActiveRoute.CF_HTTP80_AUTO
+
         PrimaryActionsStack(
             strings = strings,
             settings = settings,
             effectiveConfig = effectiveConfig,
             showPort80InPrimaryStack = settings.simpleMode,
+            isAutoPort80Active = isAutoPort80Active,
             onOpenTelegram = openTelegram,
             onCopyLink = copyLink,
             onShareLink = shareLink,
@@ -224,6 +230,7 @@ fun ConnectionScreen(
                 ProRoutingGroup(
                     strings = strings,
                     settings = settings,
+                    isAutoPort80Active = isAutoPort80Active,
                 )
             }
         }
@@ -279,11 +286,26 @@ private fun SculptedHeroCard(
         strings.heroStoppedSub
     }
 
-    val upstreamRouteLabel = when {
-        effectiveConfig.disableSecure && effectiveConfig.fallbackCfproxy -> strings.routeNodeCfHttp80
-        effectiveConfig.h2Enabled -> strings.routeNodeCfH2
-        effectiveConfig.fallbackCfproxy -> strings.routeNodeCfTls
-        else -> strings.routeNodeDirectWs
+    val liveRoute = if (isRunning) stats.activeRoute else ActiveRoute.NONE
+    val isPort80Live = isRunning && (
+        liveRoute == ActiveRoute.CF_HTTP80_AUTO ||
+            liveRoute == ActiveRoute.CF_HTTP80 ||
+            (liveRoute == ActiveRoute.NONE && effectiveConfig.disableSecure && effectiveConfig.fallbackCfproxy)
+        )
+    val upstreamRouteLabel = when (liveRoute) {
+        ActiveRoute.DIRECT_WS -> strings.routeNodeDirectWs
+        ActiveRoute.CF_H2 -> strings.routeNodeCfH2
+        ActiveRoute.CF_TLS -> strings.routeNodeCfTls
+        ActiveRoute.CF_HTTP80 -> strings.routeNodeCfHttp80
+        ActiveRoute.CF_HTTP80_AUTO -> strings.routeNodeCfHttp80Auto
+        ActiveRoute.CF_WORKER -> strings.routeNodeCfWorker
+        ActiveRoute.TCP_FALLBACK -> strings.routeNodeTcp
+        ActiveRoute.NONE -> when {
+            effectiveConfig.disableSecure && effectiveConfig.fallbackCfproxy -> strings.routeNodeCfHttp80
+            effectiveConfig.h2Enabled -> strings.routeNodeCfH2
+            effectiveConfig.fallbackCfproxy -> strings.routeNodeCfTls
+            else -> strings.routeNodeDirectWs
+        }
     }
 
     val glowAlpha by animateFloatAsState(
@@ -436,6 +458,7 @@ private fun SculptedHeroCard(
                     localEndpoint = ":${effectiveConfig.port}",
                     upstreamLabel = upstreamRouteLabel,
                     isRunning = isRunning,
+                    useLiveGreenUpstream = isPort80Live,
                 )
             }
         }
@@ -485,6 +508,7 @@ private fun PrimaryActionsStack(
     settings: AppSettings,
     effectiveConfig: ProxyConfig,
     showPort80InPrimaryStack: Boolean,
+    isAutoPort80Active: Boolean,
     onOpenTelegram: () -> Unit,
     onCopyLink: () -> Unit,
     onShareLink: () -> Unit,
@@ -568,6 +592,12 @@ private fun PrimaryActionsStack(
 
         // Item 1 (Simple mode): Fallback Port 80
         if (showPort80InPrimaryStack) {
+            val port80Highlighted = settings.disableSecure || isAutoPort80Active
+            val port80BadgeText = when {
+                settings.disableSecure -> strings.fallbackPortBadge
+                isAutoPort80Active -> strings.fallbackPortAutoBadge
+                else -> null
+            }
             VelvetGroupItem(
                 index = 1,
                 count = totalItems,
@@ -578,8 +608,8 @@ private fun PrimaryActionsStack(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     VelvetIconBadge(
-                        containerColor = if (settings.disableSecure) velvet.liveGreenSoft else velvet.cardSub,
-                        contentColor = if (settings.disableSecure) velvet.liveGreen else cs.onSurfaceVariant,
+                        containerColor = if (port80Highlighted) velvet.liveGreenSoft else velvet.cardSub,
+                        contentColor = if (port80Highlighted) velvet.liveGreen else cs.onSurfaceVariant,
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Bolt,
@@ -605,13 +635,13 @@ private fun PrimaryActionsStack(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false),
                             )
-                            if (settings.disableSecure) {
+                            if (port80BadgeText != null) {
                                 Surface(
                                     shape = RoundedCornerShape(6.dp),
                                     color = velvet.liveGreenSoft,
                                 ) {
                                     Text(
-                                        text = strings.fallbackPortBadge,
+                                        text = port80BadgeText,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = velvet.liveGreen,
                                         maxLines = 1,
@@ -671,7 +701,11 @@ private fun InlineRouteDiagnosticsItem(
                     ConnectivityTester.quickRouteCheck(effectiveConfig)
                 }.getOrNull()
                 report = res
-                ProxyController.applyDiagnosticWinner(res?.bestCfDomain, res?.bestCfLatencyMs)
+                ProxyController.applyDiagnosticWinner(
+                    domain = res?.bestCfDomain,
+                    latencyMs = res?.bestCfLatencyMs,
+                    tlsBlocked = res?.suggestPort80 == true,
+                )
                 probing = false
             }
         }
@@ -1032,10 +1066,15 @@ private fun TelemetryTile(
 private fun ProRoutingGroup(
     strings: AppStrings,
     settings: AppSettings,
+    isAutoPort80Active: Boolean,
 ) {
-    val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
     val h2EffectiveEnabled = settings.cfproxyEnabled && !settings.disableSecure && !settings.forceTestDc
+    val port80Badge = when {
+        settings.disableSecure -> strings.fallbackPortBadge
+        isAutoPort80Active -> strings.fallbackPortAutoBadge
+        else -> null
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -1059,7 +1098,9 @@ private fun ProRoutingGroup(
                             modifier = Modifier.size(20.dp),
                         )
                     },
-                    badgeActive = settings.disableSecure,
+                    badgeActive = settings.disableSecure || isAutoPort80Active,
+                    useLiveGreenBadge = settings.disableSecure || isAutoPort80Active,
+                    statusBadge = port80Badge,
                     title = strings.disableTlsTitle,
                     subtitle = strings.disableTlsSubtitle,
                     checked = settings.disableSecure,
@@ -1132,6 +1173,8 @@ private fun ProSwitchRow(
     checked: Boolean,
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    useLiveGreenBadge: Boolean = false,
+    statusBadge: String? = null,
 ) {
     val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
@@ -1141,8 +1184,16 @@ private fun ProSwitchRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         VelvetIconBadge(
-            containerColor = if (badgeActive) velvet.accentSoft else velvet.cardSub,
-            contentColor = if (badgeActive) velvet.accent else cs.onSurfaceVariant,
+            containerColor = when {
+                badgeActive && useLiveGreenBadge -> velvet.liveGreenSoft
+                badgeActive -> velvet.accentSoft
+                else -> velvet.cardSub
+            },
+            contentColor = when {
+                badgeActive && useLiveGreenBadge -> velvet.liveGreen
+                badgeActive -> velvet.accent
+                else -> cs.onSurfaceVariant
+            },
             content = icon,
         )
         Spacer(Modifier.width(13.dp))
@@ -1152,11 +1203,34 @@ private fun ProSwitchRow(
                 .padding(end = 12.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                color = if (enabled) cs.onSurface else cs.onSurfaceVariant,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (enabled) cs.onSurface else cs.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (statusBadge != null) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = velvet.liveGreenSoft,
+                    ) {
+                        Text(
+                            text = statusBadge,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = velvet.liveGreen,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,

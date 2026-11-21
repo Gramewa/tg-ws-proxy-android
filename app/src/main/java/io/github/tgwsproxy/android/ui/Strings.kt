@@ -32,6 +32,7 @@ data class AppStrings(
     val fallbackPortTitle: String,
     val fallbackPortSub: String,
     val fallbackPortBadge: String,
+    val fallbackPortAutoBadge: String,
 
     val routeCheckTitle: String,
     val routeCheckSub: String,
@@ -51,6 +52,9 @@ data class AppStrings(
     val routeNodeCfH2: String,
     val routeNodeCfTls: String,
     val routeNodeCfHttp80: String,
+    val routeNodeCfHttp80Auto: String,
+    val routeNodeCfWorker: String,
+    val routeNodeTcp: String,
 
     val keyMismatchTitle: String,
     val keyMismatchBody: String,
@@ -243,6 +247,7 @@ private val RuStrings = AppStrings(
     fallbackPortTitle = "Резервный порт 80",
     fallbackPortSub = "Если долго висит подключение или не грузятся медиа",
     fallbackPortBadge = "HTTP :80",
+    fallbackPortAutoBadge = "Авто :80",
 
     routeCheckTitle = "Проверить маршрут",
     routeCheckSub = "Пинг до Telegram и доменов Cloudflare",
@@ -262,6 +267,9 @@ private val RuStrings = AppStrings(
     routeNodeCfH2 = "CF HTTP/2",
     routeNodeCfTls = "CF TLS",
     routeNodeCfHttp80 = "CF HTTP :80",
+    routeNodeCfHttp80Auto = "CF :80 (авто)",
+    routeNodeCfWorker = "CF Worker",
+    routeNodeTcp = "TCP :443",
 
     keyMismatchTitle = "Не подходит ключ",
     keyMismatchBody = "Telegram стучится со старым секретом. Обновите прокси в клиенте.",
@@ -454,6 +462,7 @@ private val EnStrings = AppStrings(
     fallbackPortTitle = "Fallback port 80",
     fallbackPortSub = "Use if Telegram stays on Connecting or media stalls",
     fallbackPortBadge = "HTTP :80",
+    fallbackPortAutoBadge = "Auto :80",
 
     routeCheckTitle = "Check route",
     routeCheckSub = "Ping Telegram DCs and Cloudflare endpoints",
@@ -473,6 +482,9 @@ private val EnStrings = AppStrings(
     routeNodeCfH2 = "CF HTTP/2",
     routeNodeCfTls = "CF TLS",
     routeNodeCfHttp80 = "CF HTTP :80",
+    routeNodeCfHttp80Auto = "CF :80 (auto)",
+    routeNodeCfWorker = "CF Worker",
+    routeNodeTcp = "TCP :443",
 
     keyMismatchTitle = "Secret mismatch",
     keyMismatchBody = "Telegram is connecting with an outdated key. Update the proxy in your client.",

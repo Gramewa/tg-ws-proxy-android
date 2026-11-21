@@ -23,6 +23,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.github.tgwsproxy.android.MainActivity
 import io.github.tgwsproxy.android.R
+import io.github.tgwsproxy.android.proxy.ActiveRoute
 import io.github.tgwsproxy.android.proxy.ProxyLogger
 import io.github.tgwsproxy.android.proxy.ProxyStats
 import io.github.tgwsproxy.android.proxy.buildTelegramProxyLink
@@ -275,20 +276,25 @@ class ProxyForegroundService : Service() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationJob = serviceScope.launch {
             var lastDigest = ""
-            screenInteractive.collectLatest { interactive ->
-                if (!interactive) {
-                    // Screen off / Doze: zero periodic notification wakeups.
-                    return@collectLatest
-                }
-                while (isActive) {
-                    val (digest, notification) = buildNotificationPayload()
-                    if (digest != lastDigest) {
-                        lastDigest = digest
-                        manager.notify(NOTIFICATION_ID, notification)
+            combine(
+                screenInteractive,
+                ProxyController.currentConfig,
+                ProxyController.statsSnapshot.map { it.activeRoute }.distinctUntilChanged(),
+            ) { interactive, _, _ -> interactive }
+                .collectLatest { interactive ->
+                    if (!interactive) {
+                        // Screen off / Doze: zero periodic notification wakeups.
+                        return@collectLatest
                     }
-                    delay(2500L)
+                    while (isActive) {
+                        val (digest, notification) = buildNotificationPayload()
+                        if (digest != lastDigest) {
+                            lastDigest = digest
+                            manager.notify(NOTIFICATION_ID, notification)
+                        }
+                        delay(2500L)
+                    }
                 }
-            }
         }
     }
 
@@ -297,10 +303,11 @@ class ProxyForegroundService : Service() {
         val stats = ProxyStats.snapshot()
         val isRu = ProxyController.settings.value.language == "ru"
 
-        val title = if (cfg.disableSecure) {
-            "TG WS Proxy · HTTP :80"
-        } else {
-            "TG WS Proxy · ${cfg.host}:${cfg.port}"
+        val title = when {
+            cfg.disableSecure && cfg.fallbackCfproxy -> "TG WS Proxy · HTTP :80"
+            stats.activeRoute == ActiveRoute.CF_HTTP80_AUTO ->
+                if (isRu) "TG WS Proxy · HTTP :80 (авто)" else "TG WS Proxy · HTTP :80 (auto)"
+            else -> "TG WS Proxy · ${cfg.host}:${cfg.port}"
         }
         val content = if (isRu) {
             "↓ ${humanBytes(stats.bytesDown)}  ↑ ${humanBytes(stats.bytesUp)} · Активных: ${stats.connectionsActive}"

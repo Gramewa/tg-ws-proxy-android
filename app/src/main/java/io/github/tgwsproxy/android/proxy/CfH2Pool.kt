@@ -16,7 +16,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Call
 import okhttp3.Callback
@@ -36,6 +35,7 @@ import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
@@ -43,6 +43,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.SSLException
 import kotlin.coroutines.resumeWithException
 
 class MtProtoTransportError(
@@ -63,8 +64,9 @@ class CfH2Pool(
         const val MAX_LANE_BYTES = 32 * 1024 * 1024
         const val DOMAIN_COOLDOWN_MS = 30_000L
         const val REQUEST_TIMEOUT_MS = 65_000L
-        const val SETUP_TIMEOUT_MS = 8_000L
-        const val RACE_STAGGER_MS = 1_200L
+        const val SETUP_TIMEOUT_MS = 6_000L
+        const val COLD_AUTO_P80_SETUP_TIMEOUT_MS = 2_200L
+        const val RACE_STAGGER_MS = 700L
         const val REPLAY_REQUEST_MS = 3_000L
         const val REPLAY_CHECK_MS = 250L
         const val REPLAY_MAX_AGE_MS = 30_000L
@@ -753,24 +755,49 @@ class CfH2Pool(
 
     suspend fun open(dc: Int, label: String): HttpChannel? {
         if (closed) return null
-        val now = System.currentTimeMillis()
-        synchronized(lock) {
-            if (now < (setupRetryAfterMs[dc] ?: 0L)) return null
+        val cfg = configProvider()
+        if (!cfg.h2Enabled) return null
+        if (cfg.autoPort80Fallback && balancer.isCfTlsBlocked()) {
+            return null
         }
-        return try {
-            withTimeout(SETUP_TIMEOUT_MS) {
-                openInternal(dc, label)
+        val now = System.currentTimeMillis()
+        val hasReusableLane = synchronized(lock) {
+            if (now < (setupRetryAfterMs[dc] ?: 0L)) return null
+            lanes.values.any { !it.closed && now >= it.failedUntilMs }
+        }
+        val setupTimeout = if (cfg.autoPort80Fallback && !hasReusableLane) {
+            COLD_AUTO_P80_SETUP_TIMEOUT_MS
+        } else {
+            SETUP_TIMEOUT_MS
+        }
+        var timedOut = true
+        val channel = try {
+            withTimeoutOrNull(setupTimeout) {
+                openInternal(dc, label).also { timedOut = false }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
+            timedOut = false
             synchronized(lock) {
                 setupRetryAfterMs[dc] = System.currentTimeMillis() + DOMAIN_COOLDOWN_MS
             }
             ProxyStats.h2Errors.incrementAndGet()
-            ProxyLogger.w("[$label] H2 DC$dc setup timed out; using WS for ${DOMAIN_COOLDOWN_MS / 1000}s")
+            ProxyLogger.w("[$label] H2 DC$dc setup failed; using WS for ${DOMAIN_COOLDOWN_MS / 1000}s")
             null
         }
+        if (timedOut) {
+            synchronized(lock) {
+                setupRetryAfterMs[dc] = System.currentTimeMillis() + DOMAIN_COOLDOWN_MS
+            }
+            if (cfg.autoPort80Fallback) {
+                balancer.markCfTlsBlocked()
+            }
+            ProxyStats.h2Errors.incrementAndGet()
+            ProxyLogger.w("[$label] H2 DC$dc setup timed out (${setupTimeout}ms); switching to WS")
+            return null
+        }
+        return channel
     }
 
     private suspend fun openInternal(dc: Int, label: String): HttpChannel? {
@@ -799,7 +826,7 @@ class CfH2Pool(
             return attachChannel(dc, reusable.first, reusable.second, label)
         }
 
-        // Collect up to 3 unblocked candidates and race preflights with 1.2s stagger (no global lock held!).
+        // Collect up to 3 unblocked candidates and race preflights with stagger (no global lock held!).
         val candidates = ArrayList<Pair<String, String>>(3)
         synchronized(lock) {
             for (baseDomain in domains) {
@@ -845,11 +872,15 @@ class CfH2Pool(
                             throw e
                         } catch (exc: Exception) {
                             candidate.close()
+                            if (!isActive || winner.get() != null) return@launch
                             ProxyStats.h2Errors.incrementAndGet()
                             synchronized(lock) {
                                 failedUntilMs[host] = System.currentTimeMillis() + DOMAIN_COOLDOWN_MS
                             }
-                            balancer.reportFailure(baseDomain, tlsSpecific = false)
+                            val tlsOrTimeout = exc is SSLException ||
+                                exc is SocketTimeoutException ||
+                                exc is EOFException
+                            balancer.reportFailure(baseDomain, tlsSpecific = tlsOrTimeout)
                             ProxyLogger.w("[$label] H2 lane=$laneId preflight failed host=$host: ${exc.javaClass.simpleName}: ${exc.message}")
                             failedSignal.trySend(Unit)
                             if (remaining.decrementAndGet() == 0) {

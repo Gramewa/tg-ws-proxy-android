@@ -73,6 +73,7 @@ class WsPool(
 
     fun get(dc: Int, isMedia: Boolean, isTestDc: Boolean = false): RawWebSocket? {
         val cfg = configProvider()
+        if (cfg.disableSecure && cfg.fallbackCfproxy && !isTestDc) return null
         val targetIp = cfg.dcRedirects[dc] ?: return null
         val key = PoolKey(dc, isMedia, isTestDc)
         val now = System.currentTimeMillis()
@@ -122,6 +123,7 @@ class WsPool(
         if (pooled != null) return pooled
 
         val cfg = configProvider()
+        if (cfg.disableSecure && cfg.fallbackCfproxy && !isTestDc) return null
         val targetIp = cfg.dcRedirects[dc] ?: return null
         if (isOfflineProvider()) return null
 
@@ -130,9 +132,10 @@ class WsPool(
         val inBackoff = synchronized(lock) { now < (refillAfterMs[key] ?: 0L) }
         if (inBackoff) return null
 
-        val domains = wsDomains(dc, isMedia)
+        // Keep on-demand probe fast (primary domain + single preferred SNI) when poolSize == 0.
+        val domains = wsDomains(dc, isMedia).take(1)
         val path = if (isTestDc) WS_PATH_TEST else WS_PATH
-        val ws = connectOne(targetIp, domains, path, cfg, connectTimeoutMs = 3_500)
+        val ws = connectOne(targetIp, domains, path, cfg, connectTimeoutMs = 2_500, singleSniOnly = true)
         if (ws != null) {
             synchronized(lock) {
                 refillFailures.remove(key)
@@ -157,6 +160,7 @@ class WsPool(
     private fun scheduleRefill(key: PoolKey, domains: List<String>) {
         val cfg = configProvider()
         if (cfg.poolSize <= 0 || key.dc !in cfg.dcRedirects || isOfflineProvider()) return
+        if (cfg.disableSecure && cfg.fallbackCfproxy && !key.isTestDc) return
         val activeScope = scope ?: return
         scheduleRotation(key, domains)
 
@@ -335,13 +339,15 @@ class WsPool(
         path: String,
         cfg: ProxyConfig,
         connectTimeoutMs: Int = 7_000,
+        singleSniOnly: Boolean = false,
     ): RawWebSocket? {
         val frontingSnis = cfg.frontingSniList
-        val sniPlan: List<String?> = if (tryFrontingFirst.get()) {
+        val fullPlan: List<String?> = if (tryFrontingFirst.get()) {
             frontingSnis + listOf(null)
         } else {
             listOf<String?>(null) + frontingSnis
         }
+        val sniPlan = if (singleSniOnly) fullPlan.take(1) else fullPlan
 
         for (domain in domains) {
             for (sni in sniPlan) {
@@ -383,6 +389,7 @@ class WsPool(
     fun warmup() {
         val cfg = configProvider()
         if (cfg.poolSize <= 0 || cfg.dcRedirects.isEmpty() || isOfflineProvider()) return
+        if (cfg.disableSecure && cfg.fallbackCfproxy && !cfg.forceTestDc) return
         val now = System.currentTimeMillis()
         for ((dc, _) in cfg.dcRedirects) {
             val mainKey = PoolKey(dc, false, cfg.forceTestDc)
@@ -397,13 +404,17 @@ class WsPool(
 
     fun onConfigUpdated() {
         val cfg = configProvider()
+        val skipDirect = cfg.disableSecure && cfg.fallbackCfproxy && !cfg.forceTestDc
+        val toCancel = ArrayList<Job>()
         val toClose = ArrayList<RawWebSocket>()
         synchronized(lock) {
+            toCancel.addAll(refilling.values)
+            refilling.clear()
             val it = idle.entries.iterator()
             while (it.hasNext()) {
                 val (key, bucket) = it.next()
                 val expectedIp = cfg.dcRedirects[key.dc]
-                if (cfg.poolSize <= 0 || expectedIp == null) {
+                if (skipDirect || cfg.poolSize <= 0 || expectedIp == null) {
                     bucket.forEach { e -> toClose.add(e.ws) }
                     it.remove()
                 } else {
@@ -422,15 +433,19 @@ class WsPool(
             refillFailures.clear()
             refillAfterMs.clear()
         }
+        toCancel.forEach { it.cancel() }
         toClose.forEach { it.closeQuietly() }
-        if (!isIdleHibernating() && !isOfflineProvider()) {
+        if (!skipDirect && !isIdleHibernating() && !isOfflineProvider()) {
             warmup()
         }
     }
 
     fun onNetworkChanged() {
+        val toCancel = ArrayList<Job>()
         val toClose = ArrayList<RawWebSocket>()
         synchronized(lock) {
+            toCancel.addAll(refilling.values)
+            refilling.clear()
             for (bucket in idle.values) {
                 for (entry in bucket) {
                     toClose.add(entry.ws)
@@ -440,6 +455,7 @@ class WsPool(
             refillFailures.clear()
             refillAfterMs.clear()
         }
+        toCancel.forEach { it.cancel() }
         toClose.forEach { it.closeQuietly() }
         if (!isIdleHibernating() && !isOfflineProvider()) {
             warmup()
@@ -469,6 +485,12 @@ class WsPool(
         toClose.forEach { it.closeQuietly() }
     }
 }
+
+data class PooledCfSocket(
+    val ws: RawWebSocket,
+    val baseDomain: String,
+    val usedPort80: Boolean,
+)
 
 class CfProxyWsPool(
     private val configProvider: () -> ProxyConfig,
@@ -512,7 +534,7 @@ class CfProxyWsPool(
     private fun currentMaxAgeMs(): Long =
         if (isMeteredProvider()) MAX_AGE_METERED_MS else MAX_AGE_WIFI_MS
 
-    fun get(dc: Int): Pair<RawWebSocket, String>? {
+    fun get(dc: Int): PooledCfSocket? {
         val cfg = configProvider()
         if (!cfg.fallbackCfproxy || cfg.forceTestDc || cfg.poolSize <= 0) return null
 
@@ -520,8 +542,9 @@ class CfProxyWsPool(
         activeDcs[dc] = now
         val maxAge = currentMaxAgeMs()
         val expectedCleanIp = cfg.effectiveCfCleanIp
+        val tlsBlocked = cfg.autoPort80Fallback && balancer.isCfTlsBlocked(now)
         val staleList = ArrayList<RawWebSocket>()
-        var hit: Pair<RawWebSocket, String>? = null
+        var hit: PooledCfSocket? = null
         var hitAgeSec = 0.0
         var left = 0
 
@@ -532,12 +555,13 @@ class CfProxyWsPool(
                 val ageMs = now - entry.createdMs
                 val modeMismatch = (cfg.disableSecure && !entry.usedPort80) ||
                     (!cfg.disableSecure && !cfg.autoPort80Fallback && entry.usedPort80) ||
+                    (!cfg.disableSecure && tlsBlocked && !entry.usedPort80) ||
                     entry.cleanIp != expectedCleanIp
                 if (ageMs >= maxAge || entry.ws.isStale() || modeMismatch) {
                     staleList.add(entry.ws)
                     continue
                 }
-                hit = entry.ws to entry.baseDomain
+                hit = PooledCfSocket(entry.ws, entry.baseDomain, entry.usedPort80)
                 hitAgeSec = ageMs / 1000.0
                 left = bucket.size
                 break
@@ -556,6 +580,15 @@ class CfProxyWsPool(
         ProxyStats.cfPoolMisses.incrementAndGet()
         scheduleRefill(dc)
         return null
+    }
+
+    fun warmup(dcs: List<Int> = listOf(2, 4)) {
+        val cfg = configProvider()
+        if (!cfg.fallbackCfproxy || cfg.forceTestDc || cfg.poolSize <= 0 || isOfflineProvider()) return
+        for (dc in dcs) {
+            scheduleRefill(dc)
+        }
+        ProxyLogger.d("CF proxy pool warmup started for DCs: ${dcs.joinToString()}")
     }
 
     private fun scheduleRefill(dc: Int) {
@@ -582,7 +615,8 @@ class CfProxyWsPool(
         try {
             val cfg = configProvider()
             if (!cfg.fallbackCfproxy || cfg.forceTestDc || isOfflineProvider()) return
-            val targetSize = min(cfg.poolSize, PER_DC_LIMIT)
+            val recentlyActive = (System.currentTimeMillis() - (activeDcs[dc] ?: 0L)) <= ACTIVE_DC_WINDOW_MS
+            val targetSize = if (recentlyActive) min(cfg.poolSize, PER_DC_LIMIT) else 1
             val needed = synchronized(lock) {
                 targetSize - idle.getOrPut(dc) { ArrayDeque() }.size
             }
@@ -699,55 +733,40 @@ class CfProxyWsPool(
     }
 
     private suspend fun connectOne(dc: Int, cfg: ProxyConfig): Entry? {
-        val candidates = balancer.getDomainsForDc(dc).take(3)
+        val candidates = balancer.getDomainsForDc(dc).take(2)
         val cleanIp = cfg.effectiveCfCleanIp
         for (baseDomain in candidates) {
-            val domain = "kws$dc.$baseDomain"
-            val preferPort80 = cfg.disableSecure ||
-                (cfg.autoPort80Fallback && balancer.shouldPreferPort80(baseDomain))
-            val ports = when {
-                cfg.disableSecure -> listOf(false)
-                preferPort80 -> listOf(false, true)
-                cfg.autoPort80Fallback -> listOf(true, false)
-                else -> listOf(true)
-            }
-            var tlsFailed = false
-            for (secure in ports) {
-                val started = System.currentTimeMillis()
-                try {
-                    val ws = RawWebSocket.connect(
-                        host = domain,
-                        domain = domain,
-                        timeoutMs = 6_000,
-                        path = WS_PATH,
-                        secure = secure,
-                        bufferSize = cfg.bufferSize,
-                        dohProvider = cfg.dohProvider,
-                        ipPreference = cfg.ipPreference,
-                        cleanIpOverride = cleanIp,
-                    )
-                    val rtt = (System.currentTimeMillis() - started).coerceAtLeast(1L)
-                    if (tlsFailed && !secure) {
-                        balancer.reportFailure(baseDomain, tlsSpecific = true)
-                    }
-                    balancer.reportSuccess(dc, baseDomain, rtt, usedPort80 = !secure)
-                    return Entry(ws, System.currentTimeMillis(), baseDomain, usedPort80 = !secure, cleanIp = cleanIp)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    if (secure) {
-                        tlsFailed = true
-                    }
+            val winner = ProxyBridge.connectSingleCfDomain(
+                dc = dc,
+                baseDomain = baseDomain,
+                config = cfg,
+                balancer = balancer,
+                label = "cf-pool",
+                mediaTag = "",
+            )
+            if (winner != null) {
+                balancer.reportSuccess(dc, winner.baseDomain, winner.rttMs, usedPort80 = winner.usedPort80)
+                if (winner.usedPort80 && !cfg.disableSecure && ProxyStats.activeRoute.get() == ActiveRoute.NONE) {
+                    ProxyStats.setActiveRoute(ActiveRoute.CF_HTTP80_AUTO)
                 }
+                return Entry(
+                    ws = winner.ws,
+                    createdMs = System.currentTimeMillis(),
+                    baseDomain = winner.baseDomain,
+                    usedPort80 = winner.usedPort80,
+                    cleanIp = cleanIp,
+                )
             }
-            balancer.reportFailure(baseDomain, tlsSpecific = false)
         }
         return null
     }
 
     fun onConfigUpdated() {
+        val toCancel = ArrayList<Job>()
         val toClose = ArrayList<RawWebSocket>()
         synchronized(lock) {
+            toCancel.addAll(refilling.values)
+            refilling.clear()
             for (bucket in idle.values) {
                 bucket.forEach { toClose.add(it.ws) }
             }
@@ -755,27 +774,40 @@ class CfProxyWsPool(
             refillFailures.clear()
             refillAfterMs.clear()
         }
-        toClose.forEach { it.closeQuietly() }
-    }
-
-    fun onNetworkChanged() {
-        val toClose = ArrayList<RawWebSocket>()
-        synchronized(lock) {
-            for (bucket in idle.values) {
-                bucket.forEach { toClose.add(it.ws) }
-            }
-            idle.clear()
-            refillFailures.clear()
-            refillAfterMs.clear()
-        }
+        toCancel.forEach { it.cancel() }
         toClose.forEach { it.closeQuietly() }
         if (!isIdleHibernating() && !isOfflineProvider()) {
             val now = System.currentTimeMillis()
-            for ((dc, ts) in activeDcs) {
-                if (now - ts <= ACTIVE_DC_WINDOW_MS) {
-                    scheduleRefill(dc)
-                }
+            val dcs = activeDcs.entries
+                .filter { now - it.value <= ACTIVE_DC_WINDOW_MS }
+                .map { it.key }
+                .ifEmpty { listOf(2, 4) }
+            warmup(dcs)
+        }
+    }
+
+    fun onNetworkChanged() {
+        val toCancel = ArrayList<Job>()
+        val toClose = ArrayList<RawWebSocket>()
+        synchronized(lock) {
+            toCancel.addAll(refilling.values)
+            refilling.clear()
+            for (bucket in idle.values) {
+                bucket.forEach { toClose.add(it.ws) }
             }
+            idle.clear()
+            refillFailures.clear()
+            refillAfterMs.clear()
+        }
+        toCancel.forEach { it.cancel() }
+        toClose.forEach { it.closeQuietly() }
+        if (!isIdleHibernating() && !isOfflineProvider()) {
+            val now = System.currentTimeMillis()
+            val dcs = activeDcs.entries
+                .filter { now - it.value <= ACTIVE_DC_WINDOW_MS }
+                .map { it.key }
+                .ifEmpty { listOf(2, 4) }
+            warmup(dcs)
         }
     }
 
@@ -1129,8 +1161,11 @@ class CfWorkerPool(
     }
 
     fun onConfigUpdated() {
+        val toCancel = ArrayList<Job>()
         val toClose = ArrayList<RawWebSocket>()
         synchronized(lock) {
+            toCancel.addAll(refilling.values)
+            refilling.clear()
             for (bucket in idle.values) {
                 bucket.forEach { toClose.add(it.ws) }
             }
@@ -1140,6 +1175,7 @@ class CfWorkerPool(
         }
         exhaustedUntilMs.clear()
         workerFailures.clear()
+        toCancel.forEach { it.cancel() }
         toClose.forEach { it.closeQuietly() }
         if (!isIdleHibernating() && !isOfflineProvider()) {
             warmup()
@@ -1147,8 +1183,11 @@ class CfWorkerPool(
     }
 
     fun onNetworkChanged() {
+        val toCancel = ArrayList<Job>()
         val toClose = ArrayList<RawWebSocket>()
         synchronized(lock) {
+            toCancel.addAll(refilling.values)
+            refilling.clear()
             for (bucket in idle.values) {
                 for (entry in bucket) {
                     toClose.add(entry.ws)
@@ -1160,6 +1199,7 @@ class CfWorkerPool(
         }
         exhaustedUntilMs.clear()
         workerFailures.clear()
+        toCancel.forEach { it.cancel() }
         toClose.forEach { it.closeQuietly() }
         if (!isIdleHibernating() && !isOfflineProvider()) {
             warmup()

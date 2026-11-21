@@ -86,6 +86,14 @@ object ProxyController {
         }
     }
 
+    init {
+        ProxyStats.onActiveRouteChanged = {
+            if (_isRunning.value) {
+                _statsSnapshot.value = ProxyStats.snapshot()
+            }
+        }
+    }
+
     fun init(context: Context) {
         if (::repository.isInitialized) return
         repository = SettingsRepository(context.applicationContext)
@@ -193,9 +201,9 @@ object ProxyController {
         server.setNetworkMetered(metered)
     }
 
-    fun applyDiagnosticWinner(domain: String?, latencyMs: Long?) {
-        if (domain.isNullOrBlank()) return
-        server.applyDiagnosticWinner(domain, latencyMs ?: 100L)
+    fun applyDiagnosticWinner(domain: String?, latencyMs: Long?, tlsBlocked: Boolean = false) {
+        if (domain.isNullOrBlank() && !tlsBlocked) return
+        server.applyDiagnosticWinner(domain, latencyMs, tlsBlocked = tlsBlocked)
     }
 
     suspend fun updateSettings(
@@ -236,6 +244,7 @@ object ProxyController {
                     server.updateConfig(cfg, persistDomainsCallback)
                 }
                 _currentConfig.value = cfg
+                _statsSnapshot.value = ProxyStats.snapshot()
             }
             return false
         }

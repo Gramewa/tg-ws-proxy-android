@@ -692,4 +692,69 @@ class ProxyProtocolTest {
         )
         assertFalse(cfg.h2Enabled)
     }
+
+    @Test
+    fun domainBalancerNetworkWideTlsBlockAppliesAcrossDomainsAndClearsOnTlsSuccessOrNetworkChange() {
+        val balancer = DomainBalancer()
+        balancer.updateDomainsList(listOf("alpha.co.uk", "beta.co.uk", "gamma.co.uk"))
+        val t0 = 2_000_000L
+
+        assertFalse(balancer.isCfTlsBlocked(t0))
+        assertFalse(balancer.shouldPreferPort80("beta.co.uk", t0))
+
+        // TLS failure on alpha.co.uk marks network-wide TLS block so other domains also prefer :80 immediately.
+        balancer.reportFailure("alpha.co.uk", tlsSpecific = true, nowMs = t0)
+        assertTrue(balancer.isCfTlsBlocked(t0 + 1_000L))
+        assertTrue(balancer.shouldPreferPort80("alpha.co.uk", t0 + 1_000L))
+        assertTrue(balancer.shouldPreferPort80("beta.co.uk", t0 + 1_000L))
+        assertTrue(balancer.shouldPreferPort80("gamma.co.uk", t0 + 1_000L))
+
+        // Succeeding over port 80 keeps network-wide TLS-blocked memory active.
+        balancer.reportSuccess(dcId = 2, domain = "alpha.co.uk", latencyMs = 120L, usedPort80 = true, nowMs = t0 + 2_000L)
+        assertTrue(balancer.isCfTlsBlocked(t0 + 2_500L))
+        assertTrue(balancer.shouldPreferPort80("beta.co.uk", t0 + 2_500L))
+
+        // Succeeding over TLS :443 clears network-wide TLS-blocked state.
+        balancer.reportSuccess(dcId = 4, domain = "beta.co.uk", latencyMs = 95L, usedPort80 = false, nowMs = t0 + 3_000L)
+        assertFalse(balancer.isCfTlsBlocked(t0 + 3_500L))
+        assertFalse(balancer.shouldPreferPort80("gamma.co.uk", t0 + 3_500L))
+
+        // Diagnostic markCfTlsBlocked + clearCfTlsBlocked / onNetworkChanged.
+        balancer.markCfTlsBlocked(t0 + 4_000L)
+        assertTrue(balancer.isCfTlsBlocked(t0 + 4_500L))
+        balancer.clearCfTlsBlocked()
+        assertFalse(balancer.isCfTlsBlocked(t0 + 4_500L))
+
+        balancer.markCfTlsBlocked(t0 + 5_000L)
+        assertTrue(balancer.isCfTlsBlocked(t0 + 5_500L))
+        balancer.onNetworkChanged()
+        assertFalse(balancer.isCfTlsBlocked(t0 + 5_500L))
+    }
+
+    @Test
+    fun proxyStatsActiveRouteTracksUpdatesNotifiesListenerAndResets() {
+        val observed = ArrayList<ActiveRoute>()
+        val prevListener = ProxyStats.onActiveRouteChanged
+        try {
+            ProxyStats.reset()
+            ProxyStats.onActiveRouteChanged = { observed.add(it) }
+
+            ProxyStats.setActiveRoute(ActiveRoute.CF_HTTP80_AUTO)
+            ProxyStats.setActiveRoute(ActiveRoute.CF_HTTP80_AUTO) // duplicate ignored
+            assertEquals(ActiveRoute.CF_HTTP80_AUTO, ProxyStats.snapshot().activeRoute)
+            assertTrue(ProxyStats.summary().contains("route=cf_http80_auto"))
+            assertEquals(listOf(ActiveRoute.CF_HTTP80_AUTO), observed)
+
+            ProxyStats.setActiveRoute(ActiveRoute.DIRECT_WS)
+            assertEquals(ActiveRoute.DIRECT_WS, ProxyStats.snapshot().activeRoute)
+            assertEquals(listOf(ActiveRoute.CF_HTTP80_AUTO, ActiveRoute.DIRECT_WS), observed)
+
+            ProxyStats.reset()
+            assertEquals(ActiveRoute.NONE, ProxyStats.snapshot().activeRoute)
+            assertEquals(listOf(ActiveRoute.CF_HTTP80_AUTO, ActiveRoute.DIRECT_WS, ActiveRoute.NONE), observed)
+        } finally {
+            ProxyStats.onActiveRouteChanged = prevListener
+            ProxyStats.reset()
+        }
+    }
 }

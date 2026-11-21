@@ -8,6 +8,7 @@ class DomainBalancer {
         private const val COOLDOWN_INITIAL_MS = 30_000L
         private const val COOLDOWN_MAX_MS = 300_000L
         private const val TLS_FAIL_PREFER_P80_MS = 180_000L
+        private const val CF_TLS_BLOCKED_WINDOW_MS = 10 * 60_000L
         private const val EWMA_ALPHA = 0.35
         private val KNOWN_DCS = listOf(1, 2, 3, 4, 5, 203)
     }
@@ -25,6 +26,7 @@ class DomainBalancer {
     private var domains: List<String> = emptyList()
     private val dcToDomain = HashMap<Int, String>()
     private val health = HashMap<String, DomainHealth>()
+    private var cfTlsBlockedUntilMs: Long = 0L
 
     fun updateDomainsList(domainsList: List<String>) {
         if (domainsList.isEmpty()) return
@@ -71,6 +73,7 @@ class DomainBalancer {
             h.cooldownUntilMs = 0L
             if (!usedPort80) {
                 h.tlsFailedUntilMs = 0L
+                cfTlsBlockedUntilMs = 0L
             }
             h.lastSuccessMs = nowMs
             val changed = dcToDomain[dcId] != domain
@@ -88,6 +91,7 @@ class DomainBalancer {
             val h = health.getOrPut(domain) { DomainHealth() }
             if (tlsSpecific) {
                 h.tlsFailedUntilMs = nowMs + TLS_FAIL_PREFER_P80_MS
+                cfTlsBlockedUntilMs = maxOf(cfTlsBlockedUntilMs, nowMs + CF_TLS_BLOCKED_WINDOW_MS)
             } else {
                 h.consecutiveFailures++
                 val exp = min(h.consecutiveFailures - 1, 4)
@@ -98,8 +102,30 @@ class DomainBalancer {
         }
     }
 
+    fun isCfTlsBlocked(nowMs: Long = System.currentTimeMillis()): Boolean {
+        synchronized(lock) {
+            return cfTlsBlockedUntilMs > nowMs
+        }
+    }
+
+    fun markCfTlsBlocked(nowMs: Long = System.currentTimeMillis()) {
+        synchronized(lock) {
+            cfTlsBlockedUntilMs = maxOf(cfTlsBlockedUntilMs, nowMs + CF_TLS_BLOCKED_WINDOW_MS)
+        }
+    }
+
+    fun clearCfTlsBlocked() {
+        synchronized(lock) {
+            cfTlsBlockedUntilMs = 0L
+            for (h in health.values) {
+                h.tlsFailedUntilMs = 0L
+            }
+        }
+    }
+
     fun shouldPreferPort80(domain: String, nowMs: Long = System.currentTimeMillis()): Boolean {
         synchronized(lock) {
+            if (cfTlsBlockedUntilMs > nowMs) return true
             val until = health[domain]?.tlsFailedUntilMs ?: 0L
             return until > nowMs
         }
@@ -131,6 +157,7 @@ class DomainBalancer {
 
     fun onNetworkChanged() {
         synchronized(lock) {
+            cfTlsBlockedUntilMs = 0L
             for (h in health.values) {
                 h.consecutiveFailures = 0
                 h.cooldownUntilMs = 0L

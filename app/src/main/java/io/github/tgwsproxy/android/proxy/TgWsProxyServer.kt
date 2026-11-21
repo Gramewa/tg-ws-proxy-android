@@ -92,11 +92,20 @@ class TgWsProxyServer {
         }
     }
 
-    fun applyDiagnosticWinner(domain: String, latencyMs: Long) {
-        val clean = domain.trim().lowercase()
-        if (clean.isEmpty()) return
-        balancer.applyProbeWinner(clean, latencyMs)
-        ProxyLogger.i("Applied diagnostic winner domain (${latencyMs}ms)")
+    fun applyDiagnosticWinner(domain: String?, latencyMs: Long?, tlsBlocked: Boolean = false) {
+        if (tlsBlocked) {
+            balancer.markCfTlsBlocked()
+            ProxyLogger.i("Diagnostic detected TLS :443 blocked -> preferring HTTP :80")
+        }
+        val clean = domain?.trim()?.lowercase().orEmpty()
+        if (clean.isNotEmpty()) {
+            val rtt = latencyMs ?: 100L
+            balancer.applyProbeWinner(clean, rtt)
+            ProxyLogger.i("Applied diagnostic winner domain (${rtt}ms)")
+        }
+        if (tlsBlocked && isRunning) {
+            cfProxyPool.onConfigUpdated()
+        }
     }
 
     fun start(
@@ -115,7 +124,16 @@ class TgWsProxyServer {
         DnsResolver.clearCache()
         FakeTls.setProfiledAppdataLen(null)
         ProxyLogger.setVerbose(config.verbose)
-        configRef.set(config)
+        val prevConfig = configRef.getAndSet(config)
+        if (
+            prevConfig.cfCleanIp != config.cfCleanIp ||
+            prevConfig.dohProvider != config.dohProvider ||
+            prevConfig.ipPreference != config.ipPreference ||
+            prevConfig.cfproxyUserDomains != config.cfproxyUserDomains ||
+            (prevConfig.disableSecure && !config.disableSecure)
+        ) {
+            balancer.clearCfTlsBlocked()
+        }
 
         val secretBytes = hexToBytes(config.secret)
         val threadSeq = AtomicInteger(0)
@@ -211,6 +229,7 @@ class TgWsProxyServer {
         }
 
         wsPool.warmup()
+        cfProxyPool.warmup()
         cfWorkerPool.warmup()
 
         scope.launch {
@@ -270,6 +289,28 @@ class TgWsProxyServer {
         ProxyLogger.setVerbose(newConfig.verbose)
         DnsResolver.clearCache()
 
+        val routingChanged = prev.disableSecure != newConfig.disableSecure ||
+            prev.autoPort80Fallback != newConfig.autoPort80Fallback ||
+            prev.fallbackCfproxy != newConfig.fallbackCfproxy ||
+            prev.cfproxyH2Media != newConfig.cfproxyH2Media ||
+            prev.dcRedirects != newConfig.dcRedirects ||
+            prev.cfproxyUserDomains != newConfig.cfproxyUserDomains ||
+            prev.cfproxyWorkerDomains != newConfig.cfproxyWorkerDomains ||
+            prev.dohProvider != newConfig.dohProvider ||
+            prev.cfCleanIp != newConfig.cfCleanIp ||
+            prev.ipPreference != newConfig.ipPreference ||
+            prev.frontingSni != newConfig.frontingSni
+
+        if (
+            (prev.disableSecure && !newConfig.disableSecure) ||
+            prev.cfCleanIp != newConfig.cfCleanIp ||
+            prev.dohProvider != newConfig.dohProvider ||
+            prev.ipPreference != newConfig.ipPreference ||
+            prev.cfproxyUserDomains != newConfig.cfproxyUserDomains
+        ) {
+            balancer.clearCfTlsBlocked()
+        }
+
         val scope = serverScope
         if (scope != null && prev.cfproxyUserDomains != newConfig.cfproxyUserDomains) {
             cfRefresher.start(
@@ -289,10 +330,22 @@ class TgWsProxyServer {
             h2Pool?.onConfigUpdated()
         }
 
+        if (routingChanged) {
+            ProxyBridge.resetTcpBackoff()
+            ProxyStats.clearActiveRoute()
+            // Cancel in-flight/stalled client sessions so Telegram reconnects immediately over the new route.
+            val staleJobs = clientJobs.toList()
+            val staleSockets = activeSockets.toList()
+            staleJobs.forEach { it.cancel() }
+            staleSockets.forEach { runCatching { it.close() } }
+            ProxyLogger.i("Applied live routing update (reset ${staleSockets.size} active session(s))")
+        } else {
+            ProxyLogger.i("Applied live configuration update (hot reload)")
+        }
+
         wsPool.onConfigUpdated()
         cfProxyPool.onConfigUpdated()
         cfWorkerPool.onConfigUpdated()
-        ProxyLogger.i("Applied live configuration update (hot reload)")
     }
 
     fun onNetworkChanged() {
@@ -302,6 +355,7 @@ class TgWsProxyServer {
         DnsResolver.clearCache()
         balancer.onNetworkChanged()
         ProxyBridge.resetTcpBackoff()
+        ProxyStats.clearActiveRoute()
 
         // Cancel in-flight client jobs & drop sockets stuck on the old network interface so Telegram reconnects immediately.
         val staleJobs = clientJobs.toList()
@@ -345,6 +399,7 @@ class TgWsProxyServer {
         runCatching { disp?.close() }
 
         ProxyLogger.i("Proxy stopped. Final stats: ${ProxyStats.summary()}")
+        ProxyStats.clearActiveRoute()
     }
 
     private suspend fun handleClient(
@@ -399,7 +454,8 @@ class TgWsProxyServer {
             val isMedia = result.isMedia
             val protoTag = result.protoTag
             val protoInt = result.protoInt
-            val isTestDc = config.forceTestDc || dc >= 10000
+            val currentCfg = configRef.get()
+            val isTestDc = currentCfg.forceTestDc || dc >= 10000
             if (dc >= 10000) {
                 ProxyLogger.i("[$label] test DC$dc -> DC${dc - 10000}")
                 dc -= 10000
@@ -413,7 +469,15 @@ class TgWsProxyServer {
             val ctx = HandshakeCrypto.buildCryptoCtx(result.decPrekeyAndIv, secret, relayInit)
             val splitter = runCatching { MsgSplitter(protoInt) }.getOrNull()
 
-            var directWs = wsPool.getOrConnect(dc, isMedia, isTestDc = isTestDc)
+            val allowDirectWs = !currentCfg.disableSecure || !currentCfg.fallbackCfproxy || isTestDc
+            var directWs = if (!allowDirectWs) {
+                null
+            } else if (currentCfg.poolSize > 0) {
+                // Non-blocking 0ms pool lookup so blocked direct :443 never stalls Telegram on Start/Restart.
+                wsPool.get(dc, isMedia, isTestDc = isTestDc)
+            } else {
+                wsPool.getOrConnect(dc, isMedia, isTestDc = isTestDc)
+            }
             if (directWs != null) {
                 try {
                     directWs.send(relayInit)
@@ -456,6 +520,7 @@ class TgWsProxyServer {
 
             ProxyLogger.i("[$label] DC$dc$mediaTag -> direct WS connected")
             ProxyStats.connectionsWs.incrementAndGet()
+            ProxyStats.setActiveRoute(ActiveRoute.DIRECT_WS)
             ProxyBridge.bridgeWsReencrypt(
                 stream = stream,
                 ws = directWs,
