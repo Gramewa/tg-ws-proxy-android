@@ -191,7 +191,7 @@ class ProxyForegroundService : Service() {
                 activeVpnTransport = vpn
                 activeValidated = validated
 
-                if ((prevVpn != null && prevVpn != vpn) || (!prevValidated && validated && networkLost)) {
+                if ((prevVpn != null && prevVpn != vpn) || (!prevValidated && validated)) {
                     networkLost = false
                     ProxyController.onNetworkChanged()
                 }
@@ -307,7 +307,8 @@ class ProxyForegroundService : Service() {
         } else {
             "↓ ${humanBytes(stats.bytesDown)}  ↑ ${humanBytes(stats.bytesUp)} · Active: ${stats.connectionsActive}"
         }
-        val digest = "$isRu|$title|$content"
+        val tgLink = buildTelegramProxyLink(cfg)
+        val digest = "$isRu|$title|$content|$tgLink"
 
         val openAppIntent = PendingIntent.getActivity(
             this,
@@ -325,7 +326,7 @@ class ProxyForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val tgUri = Uri.parse(buildTelegramProxyLink(cfg))
+        val tgUri = Uri.parse(tgLink)
         val tgIntent = PendingIntent.getActivity(
             this,
             2,

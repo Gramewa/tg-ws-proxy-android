@@ -419,11 +419,11 @@ class RawWebSocket private constructor(
                 timeoutMs = effectiveTimeout,
                 bufferSize = bufferSize,
             )
-            var activeSocket: Socket = rawSocket
+            val activeSocketRef = AtomicReference<Socket>(rawSocket)
 
             val cancelHandle = coroutineContext[Job]?.invokeOnCompletion { cause ->
                 if (cause != null) {
-                    try { activeSocket.close() } catch (_: Exception) {}
+                    try { activeSocketRef.get().close() } catch (_: Exception) {}
                     try { rawSocket.close() } catch (_: Exception) {}
                 }
             }
@@ -435,7 +435,7 @@ class RawWebSocket private constructor(
                     val effectiveSni = sni ?: domain
                     val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
                     val sslSocket = factory.createSocket(rawSocket, effectiveSni, 443, true) as SSLSocket
-                    activeSocket = sslSocket
+                    activeSocketRef.set(sslSocket)
                     val params = sslSocket.sslParameters
                     params.serverNames = listOf(SNIHostName(effectiveSni))
                     // API 29+ ALPN hint for HTTP/1.1 WebSocket upgrade; safe no-op on Android 8.0-9
@@ -456,6 +456,7 @@ class RawWebSocket private constructor(
                     }
                 }
 
+                val activeSocket = activeSocketRef.get()
                 val keyBytes = ByteArray(16).also { sharedRandom.nextBytes(it) }
                 val wsKey = Base64.getEncoder().encodeToString(keyBytes)
                 val expectedAccept = computeWebSocketAccept(wsKey)
@@ -478,7 +479,7 @@ class RawWebSocket private constructor(
 
                 val bufferedIn = BufferedInputStream(activeSocket.getInputStream(), 8192)
                 val responseLines = ArrayList<String>(12)
-                while (true) {
+                while (responseLines.size < 64) {
                     val line = readHttpLine(bufferedIn) ?: break
                     if (line.isEmpty()) break
                     responseLines.add(line)
@@ -519,7 +520,7 @@ class RawWebSocket private constructor(
 
                 throw WsHandshakeError(statusCode, firstLine, headers, headers["location"])
             } catch (t: Throwable) {
-                try { activeSocket.close() } catch (_: Exception) {}
+                try { activeSocketRef.get().close() } catch (_: Exception) {}
                 try { rawSocket.close() } catch (_: Exception) {}
                 throw t
             } finally {
@@ -624,10 +625,10 @@ class RawWebSocket private constructor(
             }
         }
 
-        private fun readHttpLine(input: InputStream): String? {
+        internal fun readHttpLine(input: InputStream, maxLineBytes: Int = 8192): String? {
             val buf = ByteArrayOutputStream(128)
             var sawAny = false
-            while (true) {
+            while (buf.size() < maxLineBytes) {
                 val b = input.read()
                 if (b == -1) {
                     return if (sawAny) buf.toString(Charsets.UTF_8.name()).trim() else null

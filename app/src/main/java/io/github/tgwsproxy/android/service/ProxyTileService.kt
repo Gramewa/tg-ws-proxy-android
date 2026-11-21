@@ -24,7 +24,8 @@ class ProxyTileService : TileService() {
             combine(
                 ProxyController.isRunning,
                 ProxyController.isTransitioning,
-            ) { running, transitioning ->
+                ProxyController.currentConfig,
+            ) { running, transitioning, _ ->
                 running to transitioning
             }.collect { (running, transitioning) ->
                 updateTile(running = running, transitioning = transitioning)

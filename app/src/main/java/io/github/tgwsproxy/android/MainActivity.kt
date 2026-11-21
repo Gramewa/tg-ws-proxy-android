@@ -503,33 +503,49 @@ fun SegmentedChoiceBar(
 ) {
     val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         color = velvet.cardSub,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             options.forEach { (key, label) ->
                 val selected = key == selectedKey
+                val bg by androidx.compose.animation.animateColorAsState(
+                    targetValue = if (selected) velvet.accent else Color.Transparent,
+                    animationSpec = tween(180),
+                    label = "segBg",
+                )
+                val fg by androidx.compose.animation.animateColorAsState(
+                    targetValue = if (selected) velvet.onAccent else cs.onSurfaceVariant,
+                    animationSpec = tween(180),
+                    label = "segFg",
+                )
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (selected) velvet.accent else Color.Transparent)
-                        .clickable { onSelect(key) }
-                        .padding(vertical = 9.dp, horizontal = 8.dp),
+                        .clip(RoundedCornerShape(11.dp))
+                        .background(bg)
+                        .clickable {
+                            if (!selected) {
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                onSelect(key)
+                            }
+                        }
+                        .padding(vertical = 9.dp, horizontal = 6.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = label,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                        color = if (selected) velvet.onAccent else cs.onSurfaceVariant,
+                        color = fg,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -552,6 +568,7 @@ private fun VelvetBottomDock(
 ) {
     val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     Box(
         modifier = Modifier
@@ -561,11 +578,11 @@ private fun VelvetBottomDock(
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(22.dp),
             color = velvet.card,
             contentColor = cs.onSurface,
             border = rememberRimBorder(velvet.rim),
-            shadowElevation = if (velvet.isDark) 8.dp else 4.dp,
+            shadowElevation = if (velvet.isDark) 6.dp else 3.dp,
         ) {
             Row(
                 modifier = Modifier
@@ -576,15 +593,28 @@ private fun VelvetBottomDock(
             ) {
                 items.forEachIndexed { index, item ->
                     val selected = selectedTab == index
-                    val bg = if (selected) velvet.accentSoft else Color.Transparent
-                    val fg = if (selected) velvet.accent else cs.onSurfaceVariant
+                    val bg by androidx.compose.animation.animateColorAsState(
+                        targetValue = if (selected) velvet.accentSoft else Color.Transparent,
+                        animationSpec = tween(180),
+                        label = "dockBg",
+                    )
+                    val fg by androidx.compose.animation.animateColorAsState(
+                        targetValue = if (selected) velvet.accent else cs.onSurfaceVariant,
+                        animationSpec = tween(180),
+                        label = "dockFg",
+                    )
 
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(18.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .background(bg)
-                            .clickable { onSelectTab(index) }
+                            .clickable {
+                                if (!selected) {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                    onSelectTab(index)
+                                }
+                            }
                             .padding(vertical = 8.dp, horizontal = 4.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -621,10 +651,11 @@ private fun InterfaceModePill(
 ) {
     val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(13.dp),
+        shape = RoundedCornerShape(12.dp),
         color = velvet.card,
         contentColor = cs.onSurface,
         border = rememberRimBorder(velvet.rim),
@@ -637,12 +668,22 @@ private fun InterfaceModePill(
             ModeSegment(
                 text = simpleLabel,
                 selected = isSimple,
-                onClick = { onSelect(true) },
+                onClick = {
+                    if (!isSimple) {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                        onSelect(true)
+                    }
+                },
             )
             ModeSegment(
                 text = expertLabel,
                 selected = !isSimple,
-                onClick = { onSelect(false) },
+                onClick = {
+                    if (isSimple) {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                        onSelect(false)
+                    }
+                },
             )
         }
     }
@@ -656,11 +697,19 @@ private fun ModeSegment(
 ) {
     val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
-    val bg = if (selected) velvet.accent else Color.Transparent
-    val fg = if (selected) velvet.onAccent else cs.onSurfaceVariant
+    val bg by androidx.compose.animation.animateColorAsState(
+        targetValue = if (selected) velvet.accent else Color.Transparent,
+        animationSpec = tween(180),
+        label = "modeBg",
+    )
+    val fg by androidx.compose.animation.animateColorAsState(
+        targetValue = if (selected) velvet.onAccent else cs.onSurfaceVariant,
+        animationSpec = tween(180),
+        label = "modeFg",
+    )
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(9.dp))
             .background(bg)
             .clickable(onClick = onClick)
             .padding(horizontal = 11.dp, vertical = 6.dp),

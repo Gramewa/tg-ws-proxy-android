@@ -217,7 +217,7 @@ fun SettingsScreen(strings: AppStrings) {
         }
     }
 
-    val fieldShape = RoundedCornerShape(14.dp)
+    val fieldShape = RoundedCornerShape(12.dp)
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -486,6 +486,8 @@ fun SettingsScreen(strings: AppStrings) {
                     onCheckedChange = { draft = draft.copy(autoPort80Fallback = it) },
                 )
 
+                androidx.compose.material3.HorizontalDivider(color = velvet.rim)
+
                 OutlinedTextField(
                     value = draft.cfCleanIp,
                     onValueChange = { draft = draft.copy(cfCleanIp = it) },
@@ -563,7 +565,7 @@ fun SettingsScreen(strings: AppStrings) {
                         }
                     },
                     enabled = !testingCf,
-                    shape = RoundedCornerShape(13.dp),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     if (testingCf) {
@@ -621,7 +623,7 @@ fun SettingsScreen(strings: AppStrings) {
                         }
                     },
                     enabled = !testingWorker,
-                    shape = RoundedCornerShape(13.dp),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     if (testingWorker) {
@@ -652,6 +654,9 @@ fun SettingsScreen(strings: AppStrings) {
                     checked = draft.disableSecure,
                     onCheckedChange = { draft = draft.copy(disableSecure = it) },
                 )
+
+                androidx.compose.material3.HorizontalDivider(color = velvet.rim)
+
                 OutlinedTextField(
                     value = draft.frontingSni,
                     onValueChange = { draft = draft.copy(frontingSni = it) },
@@ -696,6 +701,8 @@ fun SettingsScreen(strings: AppStrings) {
                     selectedKey = draft.ipPreference,
                     onSelect = { draft = draft.copy(ipPreference = it) },
                 )
+
+                androidx.compose.material3.HorizontalDivider(color = velvet.rim)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1017,7 +1024,7 @@ private fun VelvetSectionCard(
     val velvet = MaterialTheme.velvet
     VelvetCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(22.dp),
         contentPadding = PaddingValues(16.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {

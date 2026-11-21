@@ -415,19 +415,27 @@ private fun LogLevelPill(
 ) {
     val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
-    val bg = if (selected) accentColor.copy(alpha = if (velvet.isDark) 0.18f else 0.14f) else velvet.card
-    val fg = if (selected) accentColor else cs.onSurfaceVariant
+    val bg by androidx.compose.animation.animateColorAsState(
+        targetValue = if (selected) accentColor.copy(alpha = if (velvet.isDark) 0.18f else 0.14f) else velvet.card,
+        animationSpec = tween(180),
+        label = "logPillBg",
+    )
+    val fg by androidx.compose.animation.animateColorAsState(
+        targetValue = if (selected) accentColor else cs.onSurfaceVariant,
+        animationSpec = tween(180),
+        label = "logPillFg",
+    )
 
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(11.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(bg)
             .clickable(onClick = onClick)
             .padding(vertical = 7.dp, horizontal = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "$label · $count",
+            text = "$label $count",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             color = fg,

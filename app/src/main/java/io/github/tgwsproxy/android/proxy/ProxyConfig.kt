@@ -373,6 +373,7 @@ class CfDomainRefresher(
 
     private fun tryFetchViaPinnedIps(path: String): String? {
         for (pinnedIp in GITHUB_RAW_PINNED_IPS.shuffled(random)) {
+            if (Thread.currentThread().isInterrupted) return null
             val body = tryFetchViaSinglePinnedIp(pinnedIp, path)
             if (body != null) return body
         }

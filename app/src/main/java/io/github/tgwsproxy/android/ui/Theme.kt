@@ -107,16 +107,16 @@ private val DarkVelvetColors = VelvetColors(
     bg = Color(0xFF0B0D11),
     card = Color(0xFF141820),
     cardSub = Color(0xFF1C222D),
-    rim = Color(0x12FFFFFF),
-    heroActive = Color(0xFF132642),
-    heroActiveRim = Color(0x3685B2FF),
+    rim = Color(0x14FFFFFF),
+    heroActive = Color(0xFF12223B),
+    heroActiveRim = Color(0x26FFFFFF),
     accent = Color(0xFF85B2FF),
     onAccent = Color(0xFF061D3D),
-    accentSoft = Color(0x2485B2FF),
+    accentSoft = Color(0x2285B2FF),
     liveGreen = Color(0xFF4ADE80),
-    liveGreenSoft = Color(0x244ADE80),
+    liveGreenSoft = Color(0x224ADE80),
     warning = Color(0xFFFBBF24),
-    warningSoft = Color(0x24FBBF24),
+    warningSoft = Color(0x22FBBF24),
     consoleBg = Color(0xFF0E1117),
 )
 
@@ -124,17 +124,17 @@ private val LightVelvetColors = VelvetColors(
     isDark = false,
     bg = Color(0xFFF1F3F8),
     card = Color(0xFFFFFFFF),
-    cardSub = Color(0xFFE6EBF4),
-    rim = Color(0x120F172A),
-    heroActive = Color(0xFFDAE7FF),
-    heroActiveRim = Color(0x2E2356C8),
+    cardSub = Color(0xFFE7ECF5),
+    rim = Color(0x140F172A),
+    heroActive = Color(0xFFDEE9FF),
+    heroActiveRim = Color(0x1F2356C8),
     accent = Color(0xFF2356C8),
     onAccent = Color(0xFFFFFFFF),
-    accentSoft = Color(0x1A2356C8),
+    accentSoft = Color(0x182356C8),
     liveGreen = Color(0xFF16A34A),
-    liveGreenSoft = Color(0x1F16A34A),
+    liveGreenSoft = Color(0x1E16A34A),
     warning = Color(0xFFD97706),
-    warningSoft = Color(0x1FD97706),
+    warningSoft = Color(0x1ED97706),
     consoleBg = Color(0xFFF7F9FC),
 )
 
@@ -282,7 +282,7 @@ val MaterialTheme.velvet: VelvetColors
     get() = LocalVelvetColors.current
 
 fun velvetGroupShape(index: Int, count: Int): Shape {
-    val outer = 24.dp
+    val outer = 22.dp
     val inner = 6.dp
     return when {
         count <= 1 -> RoundedCornerShape(outer)
@@ -309,7 +309,7 @@ fun rememberRimBorder(rimColor: Color = MaterialTheme.velvet.rim): BorderStroke 
             width = 1.dp,
             brush = Brush.verticalGradient(
                 0.0f to rimColor,
-                0.42f to rimColor.copy(alpha = rimColor.alpha * 0.30f),
+                0.45f to rimColor.copy(alpha = rimColor.alpha * 0.28f),
                 1.0f to Color.Transparent,
             ),
         )
@@ -321,7 +321,7 @@ fun VelvetCard(
     modifier: Modifier = Modifier,
     containerColor: Color = MaterialTheme.velvet.card,
     rimColor: Color = MaterialTheme.velvet.rim,
-    shape: Shape = RoundedCornerShape(24.dp),
+    shape: Shape = RoundedCornerShape(22.dp),
     contentPadding: PaddingValues = PaddingValues(16.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -342,7 +342,7 @@ fun VelvetCard(
 @Composable
 fun VelvetGroup(
     modifier: Modifier = Modifier,
-    spacing: Dp = 3.dp,
+    spacing: Dp = 2.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
@@ -363,7 +363,7 @@ fun VelvetGroupItem(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = velvetGroupShape(index, count)
-    val rim = if (index == 0) MaterialTheme.velvet.rim else MaterialTheme.velvet.rim.copy(alpha = MaterialTheme.velvet.rim.alpha * 0.55f)
+    val rim = if (index == 0) MaterialTheme.velvet.rim else MaterialTheme.velvet.rim.copy(alpha = MaterialTheme.velvet.rim.alpha * 0.50f)
     if (onClick != null) {
         Surface(
             onClick = onClick,
@@ -404,7 +404,7 @@ fun VelvetIconBadge(
     Box(
         modifier = Modifier
             .size(size)
-            .clip(RoundedCornerShape(13.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(containerColor),
         contentAlignment = Alignment.Center,
     ) {
@@ -431,7 +431,7 @@ fun MorphingPowerButton(
         isPressed -> 14.dp
         isTransitioning -> 22.dp
         isRunning -> 20.dp
-        else -> 34.dp
+        else -> 33.dp
     }
     val cornerRadius by animateDpAsState(
         targetValue = targetCorner,
@@ -449,48 +449,69 @@ fun MorphingPowerButton(
     val containerColor by animateColorAsState(
         targetValue = when {
             isTransitioning -> velvet.accent.copy(alpha = 0.78f)
-            isRunning -> velvet.accent
             else -> velvet.accent
         },
-        animationSpec = tween(260),
+        animationSpec = tween(240),
         label = "powerBg",
+    )
+    val ringAlpha by animateFloatAsState(
+        targetValue = if (isRunning) 0.28f else 0f,
+        animationSpec = tween(320),
+        label = "powerRing",
     )
 
     val shape = RoundedCornerShape(cornerRadius)
     Box(
         modifier = modifier
-            .size(66.dp)
+            .size(72.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
-            }
-            .clip(shape)
-            .background(containerColor)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                enabled = !isTransitioning,
-                role = Role.Button,
-                onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onClick()
-                },
-            ),
+            },
         contentAlignment = Alignment.Center,
     ) {
-        if (isTransitioning) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
-                strokeWidth = 2.6.dp,
-                color = velvet.onAccent,
+        if (ringAlpha > 0.01f) {
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(RoundedCornerShape(cornerRadius + 4.dp))
+                    .background(velvet.accent.copy(alpha = ringAlpha * 0.42f)),
             )
-        } else {
-            Icon(
-                imageVector = if (isRunning) Icons.Rounded.Stop else Icons.Rounded.PowerSettingsNew,
-                contentDescription = contentDescription,
-                tint = velvet.onAccent,
-                modifier = Modifier.size(if (isRunning) 28.dp else 27.dp),
-            )
+        }
+        Surface(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(shape)
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    enabled = !isTransitioning,
+                    role = Role.Button,
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onClick()
+                    },
+                ),
+            shape = shape,
+            color = containerColor,
+            border = rememberRimBorder(Color.White.copy(alpha = if (velvet.isDark) 0.22f else 0.34f)),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                if (isTransitioning) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.6.dp,
+                        color = velvet.onAccent,
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (isRunning) Icons.Rounded.Stop else Icons.Rounded.PowerSettingsNew,
+                        contentDescription = contentDescription,
+                        tint = velvet.onAccent,
+                        modifier = Modifier.size(if (isRunning) 28.dp else 27.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -511,7 +532,7 @@ fun ThroughputWaveCanvas(
             initialValue = 0f,
             targetValue = (2.0 * PI).toFloat(),
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 4200, easing = LinearEasing),
+                animation = tween(durationMillis = 4600, easing = LinearEasing),
                 repeatMode = RepeatMode.Restart,
             ),
             label = "wavePhase",
@@ -521,16 +542,16 @@ fun ThroughputWaveCanvas(
         0f
     }
 
-    val beaconPulse = if (isRunning) {
-        val transition = rememberInfiniteTransition(label = "velvetBeacon")
+    val reticleBreath = if (isRunning) {
+        val transition = rememberInfiniteTransition(label = "velvetReticle")
         val b by transition.animateFloat(
-            initialValue = 0.35f,
+            initialValue = 0.25f,
             targetValue = 1f,
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 1400, easing = FastOutSlowInEasing),
+                animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
                 repeatMode = RepeatMode.Reverse,
             ),
-            label = "beaconAlpha",
+            label = "reticleAlpha",
         )
         b
     } else {
@@ -539,7 +560,8 @@ fun ThroughputWaveCanvas(
 
     val primaryColor = velvet.accent
     val secondaryColor = velvet.liveGreen
-    val idleLineColor = cs.outline.copy(alpha = if (velvet.isDark) 0.34f else 0.28f)
+    val gridColor = cs.outline.copy(alpha = if (velvet.isDark) 0.24f else 0.20f)
+    val tickColor = cs.outline.copy(alpha = if (velvet.isDark) 0.36f else 0.28f)
 
     Canvas(modifier = modifier) {
         val w = size.width
@@ -548,35 +570,74 @@ fun ThroughputWaveCanvas(
 
         val padRight = 10.dp.toPx()
         val usableW = (w - padRight).coerceAtLeast(1f)
-        val baseLineY = h * 0.84f
+        val baseLineY = h * 0.85f
+        val tickHeight = 3.5.dp.toPx()
+
+        // Calibrated scientific-instrument horizon & reference ticks
+        drawLine(
+            color = gridColor,
+            start = Offset(0f, baseLineY),
+            end = Offset(usableW, baseLineY),
+            strokeWidth = 1.dp.toPx(),
+            cap = StrokeCap.Round,
+        )
+        val tickCount = 6
+        for (t in 0..tickCount) {
+            val tx = usableW * (t.toFloat() / tickCount.toFloat())
+            val th = if (t == 0 || t == tickCount || t == tickCount / 2) tickHeight * 1.35f else tickHeight
+            drawLine(
+                color = tickColor,
+                start = Offset(tx, baseLineY),
+                end = Offset(tx, (baseLineY + th).coerceAtMost(h)),
+                strokeWidth = 1.dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+        }
 
         if (!isRunning) {
-            drawLine(
-                color = idleLineColor,
-                start = Offset(0f, baseLineY),
-                end = Offset(usableW, baseLineY),
-                strokeWidth = 1.5.dp.toPx(),
-                cap = StrokeCap.Round,
+            // Serene resting marker at right horizon when in standby
+            drawCircle(
+                color = tickColor,
+                radius = 2.6.dp.toPx(),
+                center = Offset(usableW, baseLineY),
             )
             return@Canvas
         }
 
         val n = downHistory.size.coerceAtLeast(2)
         var peakBps = 48f * 1024f
-        for (v in downHistory) if (v > peakBps) peakBps = v
-        for (v in upHistory) if (v > peakBps) peakBps = v
+        var recentMax = 0f
+        for (i in downHistory.indices) {
+            val v = downHistory[i]
+            if (v > peakBps) peakBps = v
+            if (i >= downHistory.size - 6 && v > recentMax) recentMax = v
+        }
+        for (i in upHistory.indices) {
+            val v = upHistory[i]
+            if (v > peakBps) peakBps = v
+            if (i >= upHistory.size - 6 && v > recentMax) recentMax = v
+        }
+        // Activity energy couples harmonic oscillation smoothly to real traffic
+        val activityEnergy = kotlin.math.sqrt((recentMax / max(peakBps, 1f)).coerceIn(0f, 1f))
 
-        fun buildWavePoints(series: List<Float>, carrierAmp: Float, phaseShift: Float): List<Offset> {
+        fun buildHarmonicPoints(
+            series: List<Float>,
+            baseAmp: Float,
+            phaseShift: Float,
+            secondOctaveWeight: Float,
+        ): List<Offset> {
             val count = series.size.coerceAtLeast(2)
             val stepX = usableW / (count - 1).toFloat()
             val maxAmplitude = h * 0.68f
+            val dynamicAmp = baseAmp * (0.72f + 0.55f * activityEnergy)
             return List(count) { idx ->
                 val x = idx * stepX
                 val raw = series[idx].coerceAtLeast(0f)
-                // Soft sqrt curve makes both light chat traffic and heavy media downloads look balanced
                 val norm = kotlin.math.sqrt((raw / max(peakBps, 1f)).coerceIn(0f, 1f))
-                val carrier = (sin(phase + phaseShift + idx * 0.36f) * 0.5f + 0.5f) * carrierAmp
-                val lift = (norm * maxAmplitude + carrier * h).coerceIn(2f, h * 0.78f)
+                val f1 = sin(phase + phaseShift + idx * 0.34f)
+                val f2 = sin(phase * 2.0f - phaseShift + idx * 0.68f)
+                val harmonic = ((f1 * (1f - secondOctaveWeight) + f2 * secondOctaveWeight) * 0.5f + 0.5f) * dynamicAmp
+                val lift = (norm * maxAmplitude + harmonic * h).coerceIn(2.5f, h * 0.79f)
                 Offset(x, (baseLineY - lift).coerceIn(4f, baseLineY))
             }
         }
@@ -594,64 +655,87 @@ fun ThroughputWaveCanvas(
             return path
         }
 
-        // Secondary upload stream (subtle emerald undertone)
+        // Secondary upload harmonic contour (restrained emerald trace)
         if (upHistory.size >= 2) {
-            val upPoints = buildWavePoints(upHistory, carrierAmp = 0.045f, phaseShift = 1.7f)
+            val upPoints = buildHarmonicPoints(
+                series = upHistory,
+                baseAmp = 0.042f,
+                phaseShift = 1.9f,
+                secondOctaveWeight = 0.25f,
+            )
             val upStrokePath = buildSmoothPath(upPoints)
             drawPath(
                 path = upStrokePath,
-                color = secondaryColor.copy(alpha = if (velvet.isDark) 0.42f else 0.34f),
+                color = secondaryColor.copy(alpha = if (velvet.isDark) 0.50f else 0.40f),
                 style = Stroke(
-                    width = 1.6.dp.toPx(),
+                    width = 1.5.dp.toPx(),
                     cap = StrokeCap.Round,
                     join = StrokeJoin.Round,
                 ),
             )
         }
 
-        // Primary download stream (sculpted sapphire curve + soft gradient fill + live tip beacon)
-        val downPoints = buildWavePoints(
+        // Primary download harmonic sweep
+        val downPoints = buildHarmonicPoints(
             series = if (downHistory.size >= 2) downHistory else List(n) { 0f },
-            carrierAmp = 0.085f,
+            baseAmp = 0.075f,
             phaseShift = 0f,
+            secondOctaveWeight = 0.30f,
         )
         val strokePath = buildSmoothPath(downPoints)
         val fillPath = Path().apply {
             addPath(strokePath)
-            lineTo(downPoints.last().x, h)
-            lineTo(downPoints.first().x, h)
+            lineTo(downPoints.last().x, baseLineY)
+            lineTo(downPoints.first().x, baseLineY)
             close()
         }
 
         drawPath(
             path = fillPath,
             brush = Brush.verticalGradient(
-                0.0f to primaryColor.copy(alpha = if (velvet.isDark) 0.32f else 0.22f),
-                0.78f to primaryColor.copy(alpha = if (velvet.isDark) 0.06f else 0.04f),
+                0.0f to primaryColor.copy(alpha = if (velvet.isDark) 0.28f else 0.19f),
+                0.65f to primaryColor.copy(alpha = if (velvet.isDark) 0.08f else 0.05f),
                 1.0f to Color.Transparent,
                 startY = 0f,
-                endY = h,
+                endY = baseLineY,
             ),
         )
+
+        // Subtle telemetry drop hairlines on every 4th sample for precision depth
+        val dropColor = primaryColor.copy(alpha = if (velvet.isDark) 0.16f else 0.12f)
+        for (i in 3 until downPoints.size - 1 step 4) {
+            val pt = downPoints[i]
+            if (baseLineY - pt.y > 6.dp.toPx()) {
+                drawLine(
+                    color = dropColor,
+                    start = Offset(pt.x, pt.y + 3.dp.toPx()),
+                    end = Offset(pt.x, baseLineY),
+                    strokeWidth = 0.8.dp.toPx(),
+                )
+            }
+        }
+
         drawPath(
             path = strokePath,
             color = primaryColor,
             style = Stroke(
-                width = 2.4.dp.toPx(),
+                width = 2.2.dp.toPx(),
                 cap = StrokeCap.Round,
                 join = StrokeJoin.Round,
             ),
         )
 
+        // Precision optical reticle at leading signal tip
         val tip = downPoints.last()
         drawCircle(
-            color = primaryColor.copy(alpha = 0.28f * beaconPulse),
-            radius = 9.dp.toPx() * (0.85f + 0.3f * beaconPulse),
+            color = primaryColor.copy(alpha = 0.32f * reticleBreath),
+            radius = 7.5.dp.toPx() * (0.88f + 0.22f * reticleBreath),
             center = tip,
+            style = Stroke(width = 1.1.dp.toPx()),
         )
         drawCircle(
             color = primaryColor,
-            radius = 3.8.dp.toPx(),
+            radius = 3.4.dp.toPx(),
             center = tip,
         )
     }
@@ -674,7 +758,7 @@ fun LiveRouteStrip(
             initialValue = 0f,
             targetValue = 1f,
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 2200, easing = LinearEasing),
+                animation = tween(durationMillis = 2400, easing = LinearEasing),
                 repeatMode = RepeatMode.Restart,
             ),
             label = "packetProgress",
@@ -686,17 +770,18 @@ fun LiveRouteStrip(
 
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(12.dp),
         color = if (isRunning) {
-            cs.background.copy(alpha = if (velvet.isDark) 0.34f else 0.55f)
+            cs.background.copy(alpha = if (velvet.isDark) 0.36f else 0.62f)
         } else {
-            velvet.cardSub.copy(alpha = if (velvet.isDark) 0.65f else 0.72f)
+            velvet.cardSub.copy(alpha = if (velvet.isDark) 0.56f else 0.70f)
         },
+        border = rememberRimBorder(velvet.rim.copy(alpha = velvet.rim.alpha * 0.7f)),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 11.dp, vertical = 8.dp),
+                .padding(horizontal = 10.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -741,7 +826,7 @@ private fun RouteNodeTag(
     val cs = MaterialTheme.colorScheme
     val bg = when {
         accent && active -> velvet.accentSoft
-        active -> velvet.card.copy(alpha = if (velvet.isDark) 0.72f else 0.88f)
+        active -> velvet.card.copy(alpha = if (velvet.isDark) 0.70f else 0.90f)
         else -> Color.Transparent
     }
     val fg = when {
@@ -751,7 +836,7 @@ private fun RouteNodeTag(
     }
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(7.dp))
             .background(bg)
             .padding(horizontal = 7.dp, vertical = 3.dp),
     ) {
@@ -777,9 +862,9 @@ private fun RouteConnectorWire(
     val velvet = MaterialTheme.velvet
     val cs = MaterialTheme.colorScheme
     val lineColor = if (active) {
-        velvet.accent.copy(alpha = 0.34f)
+        velvet.accent.copy(alpha = 0.30f)
     } else {
-        cs.outline.copy(alpha = 0.28f)
+        cs.outline.copy(alpha = 0.24f)
     }
     val dotColor = velvet.liveGreen
 
@@ -789,19 +874,26 @@ private fun RouteConnectorWire(
             color = lineColor,
             start = Offset(0f, midY),
             end = Offset(size.width, midY),
-            strokeWidth = 1.5.dp.toPx(),
+            strokeWidth = 1.2.dp.toPx(),
             cap = StrokeCap.Round,
         )
         if (active && progress in 0.02f..0.98f) {
             val x = size.width * progress
-            drawCircle(
-                color = dotColor.copy(alpha = 0.30f),
-                radius = 5.dp.toPx(),
-                center = Offset(x, midY),
+            val tailStart = (x - 10.dp.toPx()).coerceAtLeast(0f)
+            drawLine(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(Color.Transparent, dotColor.copy(alpha = 0.72f)),
+                    startX = tailStart,
+                    endX = x,
+                ),
+                start = Offset(tailStart, midY),
+                end = Offset(x, midY),
+                strokeWidth = 2.dp.toPx(),
+                cap = StrokeCap.Round,
             )
             drawCircle(
                 color = dotColor,
-                radius = 2.4.dp.toPx(),
+                radius = 2.2.dp.toPx(),
                 center = Offset(x, midY),
             )
         }

@@ -251,7 +251,9 @@ class TgWsProxyServer {
                     cJob.start()
                 }
             } finally {
-                isRunning = false
+                if (sessionGeneration.get() == gen) {
+                    isRunning = false
+                }
             }
         }
     }
@@ -301,8 +303,10 @@ class TgWsProxyServer {
         balancer.onNetworkChanged()
         ProxyBridge.resetTcpBackoff()
 
-        // Drop active sockets stuck on the old network interface so Telegram reconnects immediately.
+        // Cancel in-flight client jobs & drop sockets stuck on the old network interface so Telegram reconnects immediately.
+        val staleJobs = clientJobs.toList()
         val staleSockets = activeSockets.toList()
+        staleJobs.forEach { it.cancel() }
         staleSockets.forEach { runCatching { it.close() } }
 
         wsPool.onNetworkChanged()

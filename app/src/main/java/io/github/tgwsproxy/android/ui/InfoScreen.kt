@@ -167,7 +167,7 @@ fun InfoScreen(strings: AppStrings) {
 
         VelvetCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(22.dp),
             contentPadding = PaddingValues(16.dp),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -207,7 +207,7 @@ fun InfoScreen(strings: AppStrings) {
                             runCatching { context.startActivity(fallback) }
                         }
                     },
-                    shape = RoundedCornerShape(13.dp),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                 ) {
@@ -228,7 +228,7 @@ fun InfoScreen(strings: AppStrings) {
                         )
                         runCatching { context.startActivity(intent) }
                     },
-                    shape = RoundedCornerShape(13.dp),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                 ) {
@@ -249,7 +249,7 @@ fun InfoScreen(strings: AppStrings) {
                         )
                         runCatching { context.startActivity(intent) }
                     },
-                    shape = RoundedCornerShape(13.dp),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                 ) {

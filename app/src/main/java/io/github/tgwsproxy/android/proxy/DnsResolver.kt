@@ -42,10 +42,10 @@ object DnsResolver {
         OkHttpClient.Builder()
             .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
             .connectionPool(ConnectionPool(2, 3, TimeUnit.MINUTES))
-            .connectTimeout(3, TimeUnit.SECONDS)
-            .readTimeout(3, TimeUnit.SECONDS)
-            .writeTimeout(3, TimeUnit.SECONDS)
-            .callTimeout(4, TimeUnit.SECONDS)
+            .connectTimeout(2500, TimeUnit.MILLISECONDS)
+            .readTimeout(2500, TimeUnit.MILLISECONDS)
+            .writeTimeout(2500, TimeUnit.MILLISECONDS)
+            .callTimeout(3000, TimeUnit.MILLISECONDS)
             .proxy(Proxy.NO_PROXY)
             .build()
     }
@@ -189,6 +189,7 @@ object DnsResolver {
         val combined = ArrayList<InetAddress>(4)
         var minTtl = MAX_TTL_SEC
         for (qtype in types) {
+            if (Thread.currentThread().isInterrupted) break
             val query = buildDnsQuery(host, qtype)
             val req = Request.Builder()
                 .url(endpoint)

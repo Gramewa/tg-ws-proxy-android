@@ -666,4 +666,30 @@ class ProxyProtocolTest {
         assertNull(base.applyImportedJson("""{"cfCleanIp":"not-an-ip"}"""))
         assertNull(base.applyImportedJson("""{"frontingSni":"https://bad/host"}"""))
     }
+
+    @Test
+    fun rawWebSocketReadHttpLineCapsHostileUnboundedLine() {
+        val hugeLine = ByteArray(20_000) { 'A'.code.toByte() }
+        val line = RawWebSocket.readHttpLine(ByteArrayInputStream(hugeLine), maxLineBytes = 512)
+        assertNotNull(line)
+        assertEquals(512, line!!.length)
+
+        val normal = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n".toByteArray()
+        val input = ByteArrayInputStream(normal)
+        assertEquals("HTTP/1.1 101 Switching Protocols", RawWebSocket.readHttpLine(input))
+        assertEquals("Upgrade: websocket", RawWebSocket.readHttpLine(input))
+        assertEquals("", RawWebSocket.readHttpLine(input))
+        assertNull(RawWebSocket.readHttpLine(input))
+    }
+
+    @Test
+    fun proxyConfigH2DisabledForTestDc() {
+        val cfg = ProxyConfig(
+            fallbackCfproxy = true,
+            cfproxyH2Media = true,
+            disableSecure = false,
+            forceTestDc = true,
+        )
+        assertFalse(cfg.h2Enabled)
+    }
 }

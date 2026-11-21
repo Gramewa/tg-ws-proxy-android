@@ -126,8 +126,9 @@ class WsPool(
         if (isOfflineProvider()) return null
 
         val key = PoolKey(dc, isMedia, isTestDc)
-        val inBackoff = synchronized(lock) { (refillFailures[key] ?: 0) > 0 }
-        if (inBackoff && cfg.poolSize > 0) return null
+        val now = System.currentTimeMillis()
+        val inBackoff = synchronized(lock) { now < (refillAfterMs[key] ?: 0L) }
+        if (inBackoff) return null
 
         val domains = wsDomains(dc, isMedia)
         val path = if (isTestDc) WS_PATH_TEST else WS_PATH
@@ -953,7 +954,8 @@ class CfWorkerPool(
     ) {
         try {
             val cfg = configProvider()
-            if (isOfflineProvider()) return
+            val activeWorkers = cfg.cfproxyWorkerDomains.ifEmpty { workerDomains }
+            if (isOfflineProvider() || activeWorkers.isEmpty()) return
             val targetSize = min(cfg.poolSize, PER_DC_LIMIT)
             val needed = synchronized(lock) {
                 targetSize - (idle.getOrPut(dc) { ArrayDeque() }.size)
@@ -962,7 +964,7 @@ class CfWorkerPool(
 
             var connected = 0
             for (i in 0 until needed) {
-                val res = connectOne(workerDomains, fallbackDst, dc, cfg)
+                val res = connectOne(activeWorkers, fallbackDst, dc, cfg)
                 var stillCurrent = false
                 if (res != null) {
                     synchronized(lock) {
@@ -1025,7 +1027,11 @@ class CfWorkerPool(
         selfJob: Job,
     ) {
         try {
-            while (configProvider().poolSize > 0) {
+            while (true) {
+                val cfg = configProvider()
+                val currentWorkers = cfg.cfproxyWorkerDomains
+                if (cfg.poolSize <= 0 || currentWorkers.isEmpty()) break
+
                 val now = System.currentTimeMillis()
                 val maxAge = currentMaxAgeMs()
                 val expired = ArrayList<RawWebSocket>()
@@ -1037,7 +1043,7 @@ class CfWorkerPool(
                     val kept = ArrayDeque<Entry>(bucket.size)
                     while (bucket.isNotEmpty()) {
                         val entry = bucket.removeFirst()
-                        if (now - entry.createdMs >= maxAge || entry.ws.isStale()) {
+                        if (now - entry.createdMs >= maxAge || entry.ws.isStale() || entry.workerDomain !in currentWorkers) {
                             expired.add(entry.ws)
                         } else {
                             kept.addLast(entry)
@@ -1053,9 +1059,9 @@ class CfWorkerPool(
                     ProxyLogger.d("CF worker pool rotated DC$dc: ${expired.size} stale, $readyCount ready")
                 }
 
-                val limit = min(configProvider().poolSize, PER_DC_LIMIT)
+                val limit = min(cfg.poolSize, PER_DC_LIMIT)
                 if (!isIdleHibernating() && !isOfflineProvider() && readyCount < limit) {
-                    scheduleRefill(dc, fallbackDst, workerDomains)
+                    scheduleRefill(dc, fallbackDst, currentWorkers)
                 }
 
                 val sleepy = (isIdleHibernating() || isOfflineProvider()) && readyCount == 0
