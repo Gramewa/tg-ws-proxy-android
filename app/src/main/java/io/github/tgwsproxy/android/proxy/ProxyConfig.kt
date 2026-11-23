@@ -307,7 +307,7 @@ class CfDomainRefresher(
                 val ok = refreshOnce(onDomainsPersisted)
                 val waitMs = if (ok) {
                     failures = 0
-                    lastSuccessMs = System.currentTimeMillis()
+                    lastSuccessMs = ProxyClock.monotonicMs()
                     CFPROXY_REFRESH_INTERVAL_MS
                 } else {
                     val idx = failures.coerceAtMost(CFPROXY_RETRY_BACKOFFS_MS.lastIndex)
@@ -323,7 +323,7 @@ class CfDomainRefresher(
 
     fun triggerRefreshIfStale() {
         if (!autoMode || refreshJob?.isActive != true) return
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         if (lastSuccessMs == 0L || now - lastSuccessMs >= 600_000L) {
             wakeSignal.trySend(Unit)
         }

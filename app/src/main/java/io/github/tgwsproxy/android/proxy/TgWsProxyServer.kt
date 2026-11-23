@@ -13,15 +13,15 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.EOFException
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.ServerSocket
 import java.net.Socket
+import java.nio.channels.ServerSocketChannel
+import java.nio.channels.SocketChannel
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -38,17 +38,18 @@ class TgWsProxyServer {
         private val random = SecureRandom()
     }
 
-    private val lastClientActivityMs = AtomicLong(System.currentTimeMillis())
+    private val lastClientActivityMs = AtomicLong(ProxyClock.monotonicMs())
     private val sessionGeneration = AtomicLong(0L)
     private val isMetered = AtomicBoolean(false)
     private val isOffline = AtomicBoolean(false)
 
     private val balancer = DomainBalancer()
     private val cfRefresher = CfDomainRefresher(balancer)
+    private val clientDisconnectWatcher = ClientDisconnectWatcher()
     private val configRef = AtomicReference(ProxyConfig())
 
     private val idleHibernatingCheck: () -> Boolean = {
-        System.currentTimeMillis() - lastClientActivityMs.get() > 180_000L
+        ProxyClock.monotonicMs() - lastClientActivityMs.get() > 180_000L
     }
     private val wsPool = WsPool(
         configProvider = { configRef.get() },
@@ -65,13 +66,14 @@ class TgWsProxyServer {
     )
     private val cfWorkerPool = CfWorkerPool(
         configProvider = { configRef.get() },
+        balancer = balancer,
         isIdleHibernating = idleHibernatingCheck,
         isMeteredProvider = { isMetered.get() },
         isOfflineProvider = { isOffline.get() },
     )
 
     @Volatile private var h2Pool: CfH2Pool? = null
-    @Volatile private var serverSocket: ServerSocket? = null
+    @Volatile private var serverChannel: ServerSocketChannel? = null
     @Volatile private var socketDispatcher: ExecutorCoroutineDispatcher? = null
     private var serverScope: CoroutineScope? = null
     private val clientJobs = ConcurrentHashMap.newKeySet<Job>()
@@ -118,7 +120,7 @@ class TgWsProxyServer {
 
         val gen = sessionGeneration.incrementAndGet()
         isOffline.set(false)
-        lastClientActivityMs.set(System.currentTimeMillis())
+        lastClientActivityMs.set(ProxyClock.monotonicMs())
         ProxyStats.reset()
         ProxyBridge.resetTcpBackoff()
         DnsResolver.clearCache()
@@ -154,13 +156,15 @@ class TgWsProxyServer {
         val h2 = if (config.h2Enabled) CfH2Pool(balancer) { configRef.get() } else null
         h2Pool = h2
 
-        // Bind ServerSocket synchronously with SO_REUSEADDR so rapid restarts succeed cleanly.
+        // Bind ServerSocketChannel synchronously with SO_REUSEADDR so rapid restarts succeed cleanly.
         val addr = InetAddress.getByName(config.host)
-        val boundSocket = ServerSocket().apply {
-            reuseAddress = true
-            bind(InetSocketAddress(addr, config.port), 128)
+        val boundChannel = ServerSocketChannel.open().apply {
+            configureBlocking(true)
+            socket().reuseAddress = true
+            socket().bind(InetSocketAddress(addr, config.port), 128)
         }
-        serverSocket = boundSocket
+        serverChannel = boundChannel
+        clientDisconnectWatcher.start()
         isRunning = true
 
         cfRefresher.start(
@@ -242,25 +246,26 @@ class TgWsProxyServer {
 
         scope.launch(dedicatedDispatcher) {
             try {
-                while (isActive && !boundSocket.isClosed) {
-                    val client = try {
-                        boundSocket.accept()
+                while (isActive && boundChannel.isOpen) {
+                    val clientChannel = try {
+                        boundChannel.accept()
                     } catch (e: IOException) {
-                        if (!isActive || boundSocket.isClosed) break
+                        if (!isActive || !boundChannel.isOpen) break
                         ProxyLogger.w("Accept error: ${e.message}")
                         delay(200)
                         continue
-                    }
+                    } ?: continue
+                    val client = clientChannel.socket()
                     if (clientJobs.size >= MAX_CONCURRENT_CLIENTS) {
                         ProxyLogger.w("Too many concurrent clients (${clientJobs.size}); rejecting connection")
-                        runCatching { client.close() }
+                        runCatching { clientChannel.close() }
                         continue
                     }
                     activeSockets.add(client)
                     lateinit var cJob: Job
                     cJob = scope.launch(context = dedicatedDispatcher, start = CoroutineStart.LAZY) {
                         try {
-                            handleClient(client, secretBytes, configRef.get(), gen, dedicatedDispatcher)
+                            handleClient(clientChannel, secretBytes, configRef.get(), gen, dedicatedDispatcher)
                         } finally {
                             activeSockets.remove(client)
                             clientJobs.remove(cJob)
@@ -287,6 +292,12 @@ class TgWsProxyServer {
         }
         val prev = configRef.getAndSet(newConfig)
         ProxyLogger.setVerbose(newConfig.verbose)
+
+        if (prev.copy(verbose = newConfig.verbose) == newConfig) {
+            ProxyLogger.i("Updated verbose logging: ${newConfig.verbose}")
+            return
+        }
+
         DnsResolver.clearCache()
 
         val routingChanged = prev.disableSecure != newConfig.disableSecure ||
@@ -380,10 +391,10 @@ class TgWsProxyServer {
         h2Pool?.close()
         h2Pool = null
         try {
-            serverSocket?.close()
+            serverChannel?.close()
         } catch (_: Exception) {
         }
-        serverSocket = null
+        serverChannel = null
 
         val socketsToClose = activeSockets.toList()
         activeSockets.clear()
@@ -391,6 +402,7 @@ class TgWsProxyServer {
 
         clientJobs.toList().forEach { it.cancel() }
         clientJobs.clear()
+        clientDisconnectWatcher.stop()
         serverScope?.cancel()
         serverScope = null
 
@@ -403,13 +415,14 @@ class TgWsProxyServer {
     }
 
     private suspend fun handleClient(
-        socket: Socket,
+        channel: SocketChannel,
         secret: ByteArray,
         config: ProxyConfig,
         gen: Long,
         relayDispatcher: CoroutineDispatcher,
     ) {
-        lastClientActivityMs.set(System.currentTimeMillis())
+        val socket = channel.socket()
+        lastClientActivityMs.set(ProxyClock.monotonicMs())
         ProxyStats.connectionsTotal.incrementAndGet()
         ProxyStats.connectionsActive.incrementAndGet()
         val remoteIp = socket.inetAddress?.hostAddress ?: "?"
@@ -417,6 +430,7 @@ class TgWsProxyServer {
 
         val cancelHandle = coroutineContext[Job]?.invokeOnCompletion { cause ->
             if (cause != null) {
+                runCatching { channel.close() }
                 runCatching { socket.close() }
             }
         }
@@ -430,8 +444,8 @@ class TgWsProxyServer {
             }
             socket.soTimeout = 10_000
 
-            val bufferedIn = BufferedInputStream(socket.getInputStream(), 8192)
-            val dataIn = DataInputStream(bufferedIn)
+            val preReadIn = BufferedClientInputStream(socket.getInputStream(), 8192)
+            val dataIn = DataInputStream(preReadIn)
             val rawOut = socket.getOutputStream()
 
             val init = readClientInit(socket, dataIn, rawOut, secret, label, config) ?: return
@@ -449,6 +463,7 @@ class TgWsProxyServer {
 
             // Disable 10s handshake read timeout for long-lived proxied session
             socket.soTimeout = 0
+            val clientSetup = clientDisconnectWatcher.createGuard(channel, preReadIn)
 
             var dc = result.dcId
             val isMedia = result.isMedia
@@ -476,11 +491,11 @@ class TgWsProxyServer {
                 // Non-blocking 0ms pool lookup so blocked direct :443 never stalls Telegram on Start/Restart.
                 wsPool.get(dc, isMedia, isTestDc = isTestDc)
             } else {
-                wsPool.getOrConnect(dc, isMedia, isTestDc = isTestDc)
+                clientSetup.guard { wsPool.getOrConnect(dc, isMedia, isTestDc = isTestDc) }
             }
             if (directWs != null) {
                 try {
-                    directWs.send(relayInit)
+                    directWs.sendInit(relayInit)
                 } catch (e: CancellationException) {
                     directWs.closeQuietly()
                     throw e
@@ -509,6 +524,7 @@ class TgWsProxyServer {
                     protoTag = protoTag,
                     cfProxyPool = cfProxyPool,
                     relayDispatcher = relayDispatcher,
+                    clientSetup = clientSetup,
                 )
                 if (ok) {
                     ProxyLogger.i("[$label] DC$dc$mediaTag fallback closed")
@@ -543,6 +559,7 @@ class TgWsProxyServer {
             if (sessionGeneration.get() == gen) {
                 ProxyStats.connectionsActive.updateAndGet { (it - 1).coerceAtLeast(0) }
             }
+            try { channel.close() } catch (_: Exception) {}
             try { socket.close() } catch (_: Exception) {}
         }
     }

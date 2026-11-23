@@ -92,7 +92,7 @@ object FakeTls {
         private val lock = Any()
         private val expiry = LinkedHashMap<ByteKey, Long>(128, 0.75f, false)
 
-        fun firstSeen(clientRandom: ByteArray, nowMs: Long = System.currentTimeMillis()): Boolean {
+        fun firstSeen(clientRandom: ByteArray, nowMs: Long = ProxyClock.monotonicMs()): Boolean {
             val key = ByteKey(clientRandom.copyOf())
             synchronized(lock) {
                 val it = expiry.entries.iterator()
@@ -392,7 +392,7 @@ object FakeTls {
                 return@withContext null
             }
 
-            val deadline = System.currentTimeMillis() + timeoutMs
+            val deadline = ProxyClock.monotonicMs() + timeoutMs
             sock = Socket()
             sock.connect(InetSocketAddress(safeAddr, port), timeoutMs)
             sock.soTimeout = timeoutMs
@@ -406,7 +406,7 @@ object FakeTls {
             val buf = ByteArray(16384)
             var result: Int? = null
             while (true) {
-                val rem = (deadline - System.currentTimeMillis()).toInt()
+                val rem = (deadline - ProxyClock.monotonicMs()).toInt()
                 if (rem <= 0) break
                 sock.soTimeout = rem
                 val n = input.read(buf)

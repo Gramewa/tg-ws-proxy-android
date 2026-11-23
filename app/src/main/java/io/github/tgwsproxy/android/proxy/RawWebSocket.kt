@@ -21,6 +21,7 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -58,11 +59,11 @@ class RawWebSocket private constructor(
         private set
 
     @Volatile
-    var lastRecvMs: Long = System.currentTimeMillis()
+    var lastRecvMs: Long = ProxyClock.monotonicMs()
         private set
 
     @Volatile
-    var lastPongMs: Long = System.currentTimeMillis()
+    var lastPongMs: Long = ProxyClock.monotonicMs()
         private set
 
     private val writeMutex = Mutex()
@@ -70,6 +71,35 @@ class RawWebSocket private constructor(
 
     fun isStale(): Boolean {
         return isClosed || socket.isClosed || socket.isInputShutdown || socket.isOutputShutdown
+    }
+
+    /**
+     * Sends the initial 64-byte MTProto relay handshake with a hard timeout and immediately
+     * closes the underlying socket on timeout, error, or cancellation (upstream v1.12.0 parity).
+     */
+    suspend fun sendInit(data: ByteArray, timeoutMs: Long = SEND_INIT_TIMEOUT_MS) {
+        try {
+            val completed = withTimeoutOrNull(timeoutMs) {
+                val cancelHandle = coroutineContext[Job]?.invokeOnCompletion { cause ->
+                    if (cause != null) {
+                        closeQuietly()
+                    }
+                }
+                try {
+                    send(data)
+                    true
+                } finally {
+                    cancelHandle?.dispose()
+                }
+            }
+            if (completed == null) {
+                closeQuietly()
+                throw SocketTimeoutException("WS init send timed out after ${timeoutMs}ms")
+            }
+        } catch (t: Throwable) {
+            closeQuietly()
+            throw t
+        }
     }
 
     suspend fun send(data: ByteArray, off: Int = 0, len: Int = data.size - off) {
@@ -126,7 +156,7 @@ class RawWebSocket private constructor(
     suspend fun recv(): ByteArray? = withContext(Dispatchers.IO) {
         while (!isClosed) {
             val (opcode, payload, fin) = readFrame()
-            lastRecvMs = System.currentTimeMillis()
+            lastRecvMs = ProxyClock.monotonicMs()
             when (opcode) {
                 OP_CLOSE -> {
                     isClosed = true
@@ -179,20 +209,34 @@ class RawWebSocket private constructor(
         null
     }
 
-    suspend fun close() {
+    suspend fun close(timeoutMs: Long = CLOSE_TIMEOUT_MS) {
         val alreadyClosed = isClosed
         isClosed = true
-        withContext(Dispatchers.IO) {
+        try {
             if (!alreadyClosed) {
-                try {
-                    val frame = buildFrame(OP_CLOSE, ByteArray(0), 0, 0, mask = true)
-                    writeMutex.withLock {
-                        output.write(frame)
-                        output.flush()
+                withTimeoutOrNull(timeoutMs) {
+                    val cancelHandle = coroutineContext[Job]?.invokeOnCompletion { cause ->
+                        if (cause != null) {
+                            closeQuietly()
+                        }
                     }
-                } catch (_: Exception) {
+                    try {
+                        val frame = buildFrame(OP_CLOSE, ByteArray(0), 0, 0, mask = true)
+                        writeMutex.withLock {
+                            withContext(Dispatchers.IO) {
+                                output.write(frame)
+                                output.flush()
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                    } finally {
+                        cancelHandle?.dispose()
+                    }
                 }
             }
+        } finally {
             closeQuietly()
         }
     }
@@ -240,6 +284,8 @@ class RawWebSocket private constructor(
         const val OP_PING = 0x9
         const val OP_PONG = 0xA
         const val MAX_MESSAGE_LEN = 16 * 1024 * 1024
+        const val SEND_INIT_TIMEOUT_MS = 10_000L
+        const val CLOSE_TIMEOUT_MS = 2_000L
 
         private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         private const val BROWSER_USER_AGENT =
@@ -396,9 +442,29 @@ class RawWebSocket private constructor(
             dohProvider: String = DnsResolver.DOH_SYSTEM,
             ipPreference: String = DnsResolver.IP_PREF_AUTO,
             cleanIpOverride: String = "",
+            portOverride: Int? = null,
         ): RawWebSocket = withContext(Dispatchers.IO) {
-            val effectiveTimeout = timeoutMs.coerceIn(1000, 10_000)
-            val port = if (secure) 443 else 80
+            val effectiveTimeout = timeoutMs.coerceIn(200, 10_000)
+            val port = portOverride ?: if (secure) 443 else 80
+            val deadlineMs = ProxyClock.monotonicMs() + effectiveTimeout
+
+            fun remainingTimeoutMs(): Int {
+                val rem = (deadlineMs - ProxyClock.monotonicMs()).toInt()
+                if (rem <= 0) {
+                    throw SocketTimeoutException("WS connect timed out after ${effectiveTimeout}ms")
+                }
+                return rem
+            }
+
+            fun logConnectFailure(stage: String, sock: Socket?, err: Throwable) {
+                if (err is CancellationException || !ProxyLogger.isDebugEnabled) return
+                val local = runCatching { sock?.localSocketAddress }.getOrNull()
+                val remote = runCatching { sock?.remoteSocketAddress }.getOrNull()
+                ProxyLogger.d(
+                    "WS setup failed: host=$host port=$port stage=$stage local=$local remote=$remote " +
+                        "error=${err.javaClass.simpleName}: ${err.message}"
+                )
+            }
 
             val addresses = try {
                 DnsResolver.resolve(
@@ -410,16 +476,23 @@ class RawWebSocket private constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
+                logConnectFailure("dns", null, t)
                 throw TcpConnectFailedException("DNS resolve failed for $host: ${t.message}", t)
             }
 
-            val rawSocket = connectTcpHappyEyeballs(
-                addresses = addresses,
-                port = port,
-                timeoutMs = effectiveTimeout,
-                bufferSize = bufferSize,
-            )
+            val rawSocket = try {
+                connectTcpHappyEyeballs(
+                    addresses = addresses,
+                    port = port,
+                    timeoutMs = remainingTimeoutMs(),
+                    bufferSize = bufferSize,
+                )
+            } catch (t: Throwable) {
+                logConnectFailure("tcp", null, t)
+                throw t
+            }
             val activeSocketRef = AtomicReference<Socket>(rawSocket)
+            var stage = if (secure) "tls" else "ws_upgrade"
 
             val cancelHandle = coroutineContext[Job]?.invokeOnCompletion { cause ->
                 if (cause != null) {
@@ -429,12 +502,13 @@ class RawWebSocket private constructor(
             }
 
             try {
-                rawSocket.soTimeout = timeoutMs.coerceAtLeast(1000)
+                rawSocket.soTimeout = remainingTimeoutMs()
 
                 if (secure) {
+                    stage = "tls"
                     val effectiveSni = sni ?: domain
                     val factory = SSLSocketFactory.getDefault() as SSLSocketFactory
-                    val sslSocket = factory.createSocket(rawSocket, effectiveSni, 443, true) as SSLSocket
+                    val sslSocket = factory.createSocket(rawSocket, effectiveSni, port, true) as SSLSocket
                     activeSocketRef.set(sslSocket)
                     val params = sslSocket.sslParameters
                     params.serverNames = listOf(SNIHostName(effectiveSni))
@@ -445,6 +519,7 @@ class RawWebSocket private constructor(
                         .filter { it == "TLSv1.3" || it == "TLSv1.2" }
                         .ifEmpty { sslSocket.enabledProtocols.toList() }
                         .toTypedArray()
+                    sslSocket.soTimeout = remainingTimeoutMs()
                     sslSocket.startHandshake()
 
                     // Fronting explicitly disables hostname checking; regular TLS verifies `domain`.
@@ -456,7 +531,10 @@ class RawWebSocket private constructor(
                     }
                 }
 
+                stage = "ws_upgrade"
                 val activeSocket = activeSocketRef.get()
+                activeSocket.soTimeout = remainingTimeoutMs()
+
                 val keyBytes = ByteArray(16).also { sharedRandom.nextBytes(it) }
                 val wsKey = Base64.getEncoder().encodeToString(keyBytes)
                 val expectedAccept = computeWebSocketAccept(wsKey)
@@ -480,6 +558,7 @@ class RawWebSocket private constructor(
                 val bufferedIn = BufferedInputStream(activeSocket.getInputStream(), 8192)
                 val responseLines = ArrayList<String>(12)
                 while (responseLines.size < 64) {
+                    activeSocket.soTimeout = remainingTimeoutMs()
                     val line = readHttpLine(bufferedIn) ?: break
                     if (line.isEmpty()) break
                     responseLines.add(line)
@@ -520,6 +599,7 @@ class RawWebSocket private constructor(
 
                 throw WsHandshakeError(statusCode, firstLine, headers, headers["location"])
             } catch (t: Throwable) {
+                logConnectFailure(stage, activeSocketRef.get(), t)
                 try { activeSocketRef.get().close() } catch (_: Exception) {}
                 try { rawSocket.close() } catch (_: Exception) {}
                 throw t

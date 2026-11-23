@@ -136,7 +136,7 @@ object ProxyLogger {
             pendingFlushJob?.cancel()
             pendingFlushJob = null
             uiDirty = false
-            lastUiEmitMs = System.currentTimeMillis()
+            lastUiEmitMs = ProxyClock.monotonicMs()
             ArrayList(buffer)
         }
         _entries.value = snapshot
@@ -159,14 +159,15 @@ object ProxyLogger {
 
     private fun log(level: LogLevel, rawMessage: String) {
         val censored = DomainCensor.censor(rawMessage)
-        val now = System.currentTimeMillis()
+        val wallNow = ProxyClock.wallClockMs()
+        val monoNow = ProxyClock.monotonicMs()
         val hasObservers = _entries.subscriptionCount.value > 0
         var immediateSnapshot: List<LogEntry>? = null
 
         synchronized(lock) {
             val entry = LogEntry(
                 id = nextId++,
-                timestampMs = now,
+                timestampMs = wallNow,
                 level = level,
                 message = censored,
             )
@@ -175,8 +176,8 @@ object ProxyLogger {
             }
             buffer.addLast(entry)
             if (hasObservers) {
-                if (now - lastUiEmitMs >= UI_EMIT_COALESCE_MS) {
-                    lastUiEmitMs = now
+                if (lastUiEmitMs == 0L || monoNow - lastUiEmitMs >= UI_EMIT_COALESCE_MS) {
+                    lastUiEmitMs = monoNow
                     uiDirty = false
                     pendingFlushJob?.cancel()
                     pendingFlushJob = null
@@ -191,7 +192,7 @@ object ProxyLogger {
                                     null
                                 } else {
                                     uiDirty = false
-                                    lastUiEmitMs = System.currentTimeMillis()
+                                    lastUiEmitMs = ProxyClock.monotonicMs()
                                     ArrayList(buffer)
                                 }
                             }

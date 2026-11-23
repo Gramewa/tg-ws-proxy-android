@@ -8,11 +8,15 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.EOFException
+import java.io.IOException
+import java.net.SocketTimeoutException
 import java.net.URLEncoder
 import java.security.SecureRandom
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.net.ssl.SSLException
 import kotlin.math.min
 
 class WsPool(
@@ -56,8 +60,8 @@ class WsPool(
 
     private fun targetSizeForKey(key: PoolKey, cfg: ProxyConfig, now: Long): Int {
         if (cfg.poolSize <= 0 || key.dc !in cfg.dcRedirects) return 0
-        val lastActive = activeKeys[key] ?: 0L
-        if (lastActive > 0L && now - lastActive <= ACTIVE_KEY_WINDOW_MS) {
+        val lastActive = activeKeys[key]
+        if (lastActive != null && now - lastActive <= ACTIVE_KEY_WINDOW_MS) {
             return cfg.poolSize
         }
         return if (!key.isMedia) 1 else 0
@@ -65,7 +69,7 @@ class WsPool(
 
     fun isDcInBackoff(dc: Int, isMedia: Boolean = false, isTestDc: Boolean = false): Boolean {
         val key = PoolKey(dc, isMedia, isTestDc)
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         return synchronized(lock) {
             (refillFailures[key] ?: 0) > 0 && now < (refillAfterMs[key] ?: 0L)
         }
@@ -76,7 +80,7 @@ class WsPool(
         if (cfg.disableSecure && cfg.fallbackCfproxy && !isTestDc) return null
         val targetIp = cfg.dcRedirects[dc] ?: return null
         val key = PoolKey(dc, isMedia, isTestDc)
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         activeKeys[key] = now
         if (cfg.poolSize <= 0) return null
 
@@ -128,7 +132,7 @@ class WsPool(
         if (isOfflineProvider()) return null
 
         val key = PoolKey(dc, isMedia, isTestDc)
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         val inBackoff = synchronized(lock) { now < (refillAfterMs[key] ?: 0L) }
         if (inBackoff) return null
 
@@ -148,7 +152,7 @@ class WsPool(
             refillFailures[key] = failures
             val exp = min(failures - 1, 12)
             val delayMs = min(REFILL_BACKOFF_INITIAL_MS shl exp, REFILL_BACKOFF_MAX_MS)
-            refillAfterMs[key] = System.currentTimeMillis() + delayMs
+            refillAfterMs[key] = ProxyClock.monotonicMs() + delayMs
         }
         return null
     }
@@ -164,7 +168,7 @@ class WsPool(
         val activeScope = scope ?: return
         scheduleRotation(key, domains)
 
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         val launchedJob = synchronized(lock) {
             if (refilling[key]?.isActive == true) return
             if (now < (refillAfterMs[key] ?: 0L)) return
@@ -185,7 +189,7 @@ class WsPool(
     ) {
         val cfg = configProvider()
         val targetIp = cfg.dcRedirects[key.dc]
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         val desired = targetSizeForKey(key, cfg, now)
         val needed = synchronized(lock) {
             val bucket = idle.getOrPut(key) { ArrayDeque() }
@@ -210,7 +214,7 @@ class WsPool(
                             synchronized(lock) {
                                 if (refilling[key] === selfJob && isActive) {
                                     val bucket = idle.getOrPut(key) { ArrayDeque() }
-                                    bucket.addLast(Entry(ws, System.currentTimeMillis(), targetIp))
+                                    bucket.addLast(Entry(ws, ProxyClock.monotonicMs(), targetIp))
                                     adopted = true
                                     connected++
                                 }
@@ -233,7 +237,7 @@ class WsPool(
                     refillFailures[key] = failures
                     val exp = min(failures - 1, 12)
                     val delayMs = min(REFILL_BACKOFF_INITIAL_MS shl exp, REFILL_BACKOFF_MAX_MS)
-                    refillAfterMs[key] = System.currentTimeMillis() + delayMs
+                    refillAfterMs[key] = ProxyClock.monotonicMs() + delayMs
                     ProxyLogger.i("WS pool refill failed for ${key.tag()}, retry in ${delayMs / 1000}s")
                 }
                 val readyCount = idle[key]?.size ?: 0
@@ -275,7 +279,7 @@ class WsPool(
                 val targetIp = cfg.dcRedirects[key.dc]
                 if (cfg.poolSize <= 0 || targetIp == null) break
 
-                val now = System.currentTimeMillis()
+                val now = ProxyClock.monotonicMs()
                 val maxAge = currentMaxAgeMs()
                 val expired = ArrayList<RawWebSocket>()
                 var readyCount = 0
@@ -321,7 +325,7 @@ class WsPool(
                         wakeAt = min(wakeAt, after)
                     }
                 }
-                val sleepMs = (wakeAt - System.currentTimeMillis()).coerceAtLeast(100L)
+                val sleepMs = (wakeAt - ProxyClock.monotonicMs()).coerceAtLeast(100L)
                 delay(sleepMs)
             }
         } finally {
@@ -390,7 +394,7 @@ class WsPool(
         val cfg = configProvider()
         if (cfg.poolSize <= 0 || cfg.dcRedirects.isEmpty() || isOfflineProvider()) return
         if (cfg.disableSecure && cfg.fallbackCfproxy && !cfg.forceTestDc) return
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         for ((dc, _) in cfg.dcRedirects) {
             val mainKey = PoolKey(dc, false, cfg.forceTestDc)
             scheduleRefill(mainKey, wsDomains(dc, false))
@@ -538,7 +542,7 @@ class CfProxyWsPool(
         val cfg = configProvider()
         if (!cfg.fallbackCfproxy || cfg.forceTestDc || cfg.poolSize <= 0) return null
 
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         activeDcs[dc] = now
         val maxAge = currentMaxAgeMs()
         val expectedCleanIp = cfg.effectiveCfCleanIp
@@ -597,7 +601,7 @@ class CfProxyWsPool(
         val activeScope = scope ?: return
         scheduleRotation(dc)
 
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         val launchedJob = synchronized(lock) {
             if (refilling[dc]?.isActive == true) return
             if (now < (refillAfterMs[dc] ?: 0L)) return
@@ -615,7 +619,8 @@ class CfProxyWsPool(
         try {
             val cfg = configProvider()
             if (!cfg.fallbackCfproxy || cfg.forceTestDc || isOfflineProvider()) return
-            val recentlyActive = (System.currentTimeMillis() - (activeDcs[dc] ?: 0L)) <= ACTIVE_DC_WINDOW_MS
+            val lastActive = activeDcs[dc]
+            val recentlyActive = lastActive != null && (ProxyClock.monotonicMs() - lastActive) <= ACTIVE_DC_WINDOW_MS
             val targetSize = if (recentlyActive) min(cfg.poolSize, PER_DC_LIMIT) else 1
             val needed = synchronized(lock) {
                 targetSize - idle.getOrPut(dc) { ArrayDeque() }.size
@@ -648,7 +653,7 @@ class CfProxyWsPool(
                     refillFailures[dc] = failures
                     val exp = min(failures - 1, 8)
                     val delayMs = min(REFILL_BACKOFF_INITIAL_MS shl exp, REFILL_BACKOFF_MAX_MS)
-                    refillAfterMs[dc] = System.currentTimeMillis() + delayMs
+                    refillAfterMs[dc] = ProxyClock.monotonicMs() + delayMs
                     ProxyLogger.d("CF proxy pool refill failed for DC$dc, retry in ${delayMs / 1000}s")
                 }
             }
@@ -681,7 +686,7 @@ class CfProxyWsPool(
                 val cfg = configProvider()
                 if (!cfg.fallbackCfproxy || cfg.forceTestDc || cfg.poolSize <= 0) break
 
-                val now = System.currentTimeMillis()
+                val now = ProxyClock.monotonicMs()
                 val maxAge = currentMaxAgeMs()
                 val expired = ArrayList<RawWebSocket>()
                 var readyCount = 0
@@ -705,7 +710,8 @@ class CfProxyWsPool(
 
                 expired.forEach { it.closeQuietly() }
 
-                val recentlyActive = (now - (activeDcs[dc] ?: 0L)) <= ACTIVE_DC_WINDOW_MS
+                val lastActive = activeDcs[dc]
+                val recentlyActive = lastActive != null && (now - lastActive) <= ACTIVE_DC_WINDOW_MS
                 val limit = if (recentlyActive) min(cfg.poolSize, PER_DC_LIMIT) else 0
                 if (!isIdleHibernating() && !isOfflineProvider() && readyCount < limit) {
                     scheduleRefill(dc)
@@ -723,7 +729,7 @@ class CfProxyWsPool(
                         wakeAt = min(wakeAt, after)
                     }
                 }
-                delay((wakeAt - System.currentTimeMillis()).coerceAtLeast(100L))
+                delay((wakeAt - ProxyClock.monotonicMs()).coerceAtLeast(100L))
             }
         } finally {
             synchronized(lock) {
@@ -751,7 +757,7 @@ class CfProxyWsPool(
                 }
                 return Entry(
                     ws = winner.ws,
-                    createdMs = System.currentTimeMillis(),
+                    createdMs = ProxyClock.monotonicMs(),
                     baseDomain = winner.baseDomain,
                     usedPort80 = winner.usedPort80,
                     cleanIp = cleanIp,
@@ -777,7 +783,7 @@ class CfProxyWsPool(
         toCancel.forEach { it.cancel() }
         toClose.forEach { it.closeQuietly() }
         if (!isIdleHibernating() && !isOfflineProvider()) {
-            val now = System.currentTimeMillis()
+            val now = ProxyClock.monotonicMs()
             val dcs = activeDcs.entries
                 .filter { now - it.value <= ACTIVE_DC_WINDOW_MS }
                 .map { it.key }
@@ -802,7 +808,7 @@ class CfProxyWsPool(
         toCancel.forEach { it.cancel() }
         toClose.forEach { it.closeQuietly() }
         if (!isIdleHibernating() && !isOfflineProvider()) {
-            val now = System.currentTimeMillis()
+            val now = ProxyClock.monotonicMs()
             val dcs = activeDcs.entries
                 .filter { now - it.value <= ACTIVE_DC_WINDOW_MS }
                 .map { it.key }
@@ -832,11 +838,37 @@ class CfProxyWsPool(
     }
 }
 
+data class PooledWorkerSocket(
+    val ws: RawWebSocket,
+    val workerDomain: String,
+    val usedPort80: Boolean,
+)
+
 class CfWorkerPool(
     private val configProvider: () -> ProxyConfig,
+    private val balancer: DomainBalancer? = null,
     private val isIdleHibernating: () -> Boolean = { false },
     private val isMeteredProvider: () -> Boolean = { false },
     private val isOfflineProvider: () -> Boolean = { false },
+    internal val connector: suspend (
+        workerDomain: String,
+        path: String,
+        secure: Boolean,
+        timeoutMs: Int,
+        cfg: ProxyConfig,
+    ) -> RawWebSocket = { workerDomain, path, secure, timeoutMs, cfg ->
+        RawWebSocket.connect(
+            host = workerDomain,
+            domain = workerDomain,
+            timeoutMs = timeoutMs,
+            path = path,
+            secure = secure,
+            bufferSize = cfg.bufferSize,
+            dohProvider = cfg.dohProvider,
+            ipPreference = cfg.ipPreference,
+            cleanIpOverride = cfg.effectiveCfCleanIp,
+        )
+    },
 ) {
     companion object {
         const val WS_POOL_MAX_AGE_MS = 100_000L
@@ -845,15 +877,34 @@ class CfWorkerPool(
         const val PER_DC_LIMIT = 1
         const val REFILL_BACKOFF_INITIAL_MS = 1_000L
         const val REFILL_BACKOFF_MAX_MS = 3_600_000L
-        private const val WORKER_QUOTA_COOLDOWN_MS = 30 * 60_000L
-        private const val WORKER_ERR_COOLDOWN_INITIAL_MS = 30_000L
-        private const val WORKER_ERR_COOLDOWN_MAX_MS = 300_000L
+        const val FAILURE_COOLDOWN_MS = 60_000L
+        private const val DAY_MS = 86_400_000L
+
+        internal fun isTimeoutException(t: Throwable?): Boolean {
+            var cur = t
+            var depth = 0
+            while (cur != null && depth < 6) {
+                if (cur is SocketTimeoutException) return true
+                cur = cur.cause
+                depth++
+            }
+            return false
+        }
+
+        internal fun shouldFallbackToAlternatePort(exc: Throwable, attemptedSecure: Boolean): Boolean {
+            if (exc is WsHandshakeError) return false
+            if (isTimeoutException(exc)) return true
+            if (attemptedSecure && (exc is SSLException || exc is EOFException)) return true
+            return false
+        }
     }
 
     private data class Entry(
         val ws: RawWebSocket,
         val createdMs: Long,
         val workerDomain: String,
+        val usedPort80: Boolean,
+        val cleanIp: String,
     )
 
     private val lock = Any()
@@ -864,7 +915,7 @@ class CfWorkerPool(
     private val refillFailures = HashMap<Int, Int>()
     private val refillAfterMs = HashMap<Int, Long>()
     private val exhaustedUntilMs = ConcurrentHashMap<String, Long>()
-    private val workerFailures = ConcurrentHashMap<String, Int>()
+    private val trySecureFirst = AtomicBoolean(true)
 
     private var scope: CoroutineScope? = null
 
@@ -872,17 +923,22 @@ class CfWorkerPool(
         scope = parentScope
     }
 
+    internal fun isTryingSecureFirst(): Boolean = trySecureFirst.get()
+
+    internal fun nextRefillAfterMs(dc: Int): Long? = synchronized(lock) { refillAfterMs[dc] }
+
     private fun currentMaxAgeMs(): Long =
         if (isMeteredProvider()) WS_POOL_MAX_AGE_METERED_MS else WS_POOL_MAX_AGE_MS
 
-    fun get(dc: Int, fallbackDst: String, workerDomains: List<String>): Pair<RawWebSocket, String>? {
+    fun get(dc: Int, fallbackDst: String, workerDomains: List<String>): PooledWorkerSocket? {
         val cfg = configProvider()
         if (cfg.poolSize <= 0 || workerDomains.isEmpty()) return null
 
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         val maxAge = currentMaxAgeMs()
+        val expectedCleanIp = cfg.effectiveCfCleanIp
         val staleList = ArrayList<RawWebSocket>()
-        var hit: Pair<RawWebSocket, String>? = null
+        var hit: PooledWorkerSocket? = null
         var hitAgeSec = 0.0
         var left = 0
 
@@ -891,11 +947,15 @@ class CfWorkerPool(
             while (bucket.isNotEmpty()) {
                 val entry = bucket.removeFirst()
                 val ageMs = now - entry.createdMs
-                if (ageMs >= maxAge || entry.ws.isStale()) {
+                val modeMismatch = (cfg.disableSecure && !entry.usedPort80) ||
+                    (!cfg.disableSecure && !cfg.autoPort80Fallback && entry.usedPort80) ||
+                    entry.cleanIp != expectedCleanIp ||
+                    entry.workerDomain !in workerDomains
+                if (ageMs >= maxAge || entry.ws.isStale() || modeMismatch) {
                     staleList.add(entry.ws)
                     continue
                 }
-                hit = entry.ws to entry.workerDomain
+                hit = PooledWorkerSocket(entry.ws, entry.workerDomain, entry.usedPort80)
                 hitAgeSec = ageMs / 1000.0
                 left = bucket.size
                 break
@@ -906,7 +966,7 @@ class CfWorkerPool(
 
         if (hit != null) {
             ProxyStats.cfPoolHits.incrementAndGet()
-            ProxyLogger.d("CF worker pool hit DC$dc via ${hit!!.second} (age=${"%.1f".format(hitAgeSec)}s, left=$left)")
+            ProxyLogger.d("CF worker pool hit DC$dc via ${hit!!.workerDomain} (age=${"%.1f".format(hitAgeSec)}s, left=$left)")
             scheduleRefill(dc, fallbackDst, workerDomains)
             return hit
         }
@@ -916,46 +976,95 @@ class CfWorkerPool(
         return null
     }
 
-    fun availableDomains(workerDomains: List<String>): List<String> {
-        val now = System.currentTimeMillis()
+    fun availableDomains(
+        workerDomains: List<String>,
+        nowMs: Long = ProxyClock.monotonicMs(),
+    ): List<String> {
         val list = ArrayList<String>(workerDomains.size)
+        val seen = HashSet<String>(workerDomains.size)
         for (domain in workerDomains) {
-            if (domain in list) continue
+            if (!seen.add(domain)) continue
             val until = exhaustedUntilMs[domain] ?: 0L
-            if (until > now) continue
+            if (until > nowMs) continue
             if (until > 0L) exhaustedUntilMs.remove(domain)
             list.add(domain)
         }
-        if (list.isEmpty() && workerDomains.isNotEmpty()) {
-            // All workers are cooling down: fall back to the one whose cooldown expires earliest.
-            val earliest = workerDomains.minByOrNull { exhaustedUntilMs[it] ?: 0L }
-            if (earliest != null) list.add(earliest)
-        } else {
+        if (list.size > 1) {
             list.shuffle(random)
         }
         return list
     }
 
     fun reportSuccess(workerDomain: String) {
-        workerFailures.remove(workerDomain)
         exhaustedUntilMs.remove(workerDomain)
     }
 
-    fun reportFailure(workerDomain: String, exc: Throwable) {
-        val now = System.currentTimeMillis()
-        val isQuotaOrRateLimit = (exc is WsHandshakeError && exc.statusCode in setOf(402, 429, 503, 520, 521, 522, 523, 524)) ||
-            (exc.message?.lowercase()?.let { "quota" in it || "limit" in it || "1027" in it } == true)
+    fun reportFailure(
+        workerDomain: String,
+        exc: Throwable,
+        nowMs: Long = ProxyClock.monotonicMs(),
+        wallClockMs: Long = ProxyClock.wallClockMs(),
+    ) {
+        val existing = exhaustedUntilMs[workerDomain] ?: 0L
+        if (existing > nowMs) return
 
-        if (isQuotaOrRateLimit) {
-            exhaustedUntilMs[workerDomain] = now + WORKER_QUOTA_COOLDOWN_MS
-            ProxyLogger.w("CF worker $workerDomain rate-limited/exhausted (${exc.message}); cooling down for 30m")
-            return
+        val cooldownMs: Long
+        val reason: String
+        when {
+            exc is WsHandshakeError -> {
+                when {
+                    exc.statusCode == 429 -> {
+                        // Cloudflare Workers free plan resets daily request quota at 00:00 UTC.
+                        val mod = ((wallClockMs % DAY_MS) + DAY_MS) % DAY_MS
+                        cooldownMs = (DAY_MS - mod).coerceAtLeast(1_000L)
+                        reason = "daily request limit"
+                    }
+                    exc.statusCode >= 500 -> {
+                        cooldownMs = FAILURE_COOLDOWN_MS
+                        reason = "HTTP ${exc.statusCode}"
+                    }
+                    else -> {
+                        // A 4xx challenge or misconfigured route is not a reason to disable the whole domain.
+                        return
+                    }
+                }
+            }
+            exc is IOException -> {
+                cooldownMs = FAILURE_COOLDOWN_MS
+                reason = "${exc.javaClass.simpleName}: ${exc.message}"
+            }
+            else -> return
         }
 
-        val failures = workerFailures.compute(workerDomain) { _, v -> (v ?: 0) + 1 } ?: 1
-        val exp = min(failures - 1, 4)
-        val cooldown = min(WORKER_ERR_COOLDOWN_INITIAL_MS shl exp, WORKER_ERR_COOLDOWN_MAX_MS)
-        exhaustedUntilMs[workerDomain] = now + cooldown
+        exhaustedUntilMs[workerDomain] = nowMs + cooldownMs
+        ProxyLogger.w(
+            "CF worker $workerDomain disabled for ${(cooldownMs / 1000L).coerceAtLeast(1L)}s: $reason"
+        )
+    }
+
+    // Must be called while holding `lock`.
+    internal fun deferIfAllWorkersPausedLocked(
+        dc: Int,
+        workerDomains: List<String>,
+        nowMs: Long,
+    ): Boolean {
+        if (workerDomains.isEmpty()) return false
+        var firstAvailable = Long.MAX_VALUE
+        for (domain in workerDomains) {
+            val until = exhaustedUntilMs[domain] ?: nowMs
+            if (until < firstAvailable) firstAvailable = until
+        }
+        if (firstAvailable <= nowMs) return false
+        refillAfterMs[dc] = firstAvailable
+        return true
+    }
+
+    internal fun deferIfAllWorkersPaused(
+        dc: Int,
+        workerDomains: List<String>,
+        nowMs: Long = ProxyClock.monotonicMs(),
+    ): Boolean = synchronized(lock) {
+        deferIfAllWorkersPausedLocked(dc, workerDomains, nowMs)
     }
 
     private fun scheduleRefill(dc: Int, fallbackDst: String, workerDomains: List<String>) {
@@ -964,10 +1073,14 @@ class CfWorkerPool(
         val activeScope = scope ?: return
         scheduleRotation(dc, fallbackDst, workerDomains)
 
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         val launchedJob = synchronized(lock) {
-            if (refilling[dc]?.isActive == true) return
-            if (now < (refillAfterMs[dc] ?: 0L)) return
+            if (refilling[dc]?.isActive == true ||
+                deferIfAllWorkersPausedLocked(dc, workerDomains, now) ||
+                now < (refillAfterMs[dc] ?: 0L)
+            ) {
+                return
+            }
             lateinit var job: Job
             job = activeScope.launch(start = CoroutineStart.LAZY) {
                 refill(dc, fallbackDst, workerDomains.toList(), job)
@@ -994,22 +1107,29 @@ class CfWorkerPool(
             }
             if (needed <= 0) return
 
+            val cleanIp = cfg.effectiveCfCleanIp
             var connected = 0
             for (i in 0 until needed) {
-                val res = connectOne(activeWorkers, fallbackDst, dc, cfg)
+                val res = connectOne(activeWorkers, fallbackDst, dc, cfg, timeoutMs = 8_000)
                 var stillCurrent = false
                 if (res != null) {
                     synchronized(lock) {
                         if (refilling[dc] === selfJob) {
                             idle.getOrPut(dc) { ArrayDeque() }.addLast(
-                                Entry(res.first, System.currentTimeMillis(), res.second)
+                                Entry(
+                                    ws = res.ws,
+                                    createdMs = ProxyClock.monotonicMs(),
+                                    workerDomain = res.workerDomain,
+                                    usedPort80 = res.usedPort80,
+                                    cleanIp = cleanIp,
+                                )
                             )
                             connected++
                             stillCurrent = true
                         }
                     }
                     if (!stillCurrent) {
-                        res.first.closeQuietly()
+                        res.ws.closeQuietly()
                         return
                     }
                 } else {
@@ -1022,12 +1142,15 @@ class CfWorkerPool(
                     refillFailures.remove(dc)
                     refillAfterMs.remove(dc)
                 } else if (!isOfflineProvider()) {
-                    val failures = (refillFailures[dc] ?: 0) + 1
-                    refillFailures[dc] = failures
-                    val exp = min(failures - 1, 12)
-                    val delayMs = min(REFILL_BACKOFF_INITIAL_MS shl exp, REFILL_BACKOFF_MAX_MS)
-                    refillAfterMs[dc] = System.currentTimeMillis() + delayMs
-                    ProxyLogger.i("CF worker pool refill failed for DC$dc, retry in ${delayMs / 1000}s")
+                    val failNow = ProxyClock.monotonicMs()
+                    if (!deferIfAllWorkersPausedLocked(dc, activeWorkers, failNow)) {
+                        val failures = (refillFailures[dc] ?: 0) + 1
+                        refillFailures[dc] = failures
+                        val exp = min(failures - 1, 12)
+                        val delayMs = min(REFILL_BACKOFF_INITIAL_MS shl exp, REFILL_BACKOFF_MAX_MS)
+                        refillAfterMs[dc] = failNow + delayMs
+                        ProxyLogger.i("CF worker pool refill failed for DC$dc, retry in ${delayMs / 1000}s")
+                    }
                 }
                 ProxyLogger.d("CF worker pool refilled DC$dc: ${idle[dc]?.size ?: 0} ready")
             }
@@ -1064,7 +1187,7 @@ class CfWorkerPool(
                 val currentWorkers = cfg.cfproxyWorkerDomains
                 if (cfg.poolSize <= 0 || currentWorkers.isEmpty()) break
 
-                val now = System.currentTimeMillis()
+                val now = ProxyClock.monotonicMs()
                 val maxAge = currentMaxAgeMs()
                 val expired = ArrayList<RawWebSocket>()
                 var readyCount = 0
@@ -1106,7 +1229,7 @@ class CfWorkerPool(
                         wakeAt = min(wakeAt, after)
                     }
                 }
-                delay((wakeAt - System.currentTimeMillis()).coerceAtLeast(100L))
+                delay((wakeAt - ProxyClock.monotonicMs()).coerceAtLeast(100L))
             }
         } finally {
             synchronized(lock) {
@@ -1115,35 +1238,58 @@ class CfWorkerPool(
         }
     }
 
-    private suspend fun connectOne(
+    /**
+     * Connects to the first healthy CF worker domain. When TLS is enabled alongside
+     * [ProxyConfig.autoPort80Fallback], automatically falls back to plain HTTP :80 on timeout
+     * or TLS failure and remembers the working mode (upstream Flowseal v1.12.0 parity).
+     */
+    suspend fun connectOne(
         workerDomains: List<String>,
         fallbackDst: String,
         dc: Int,
-        cfg: ProxyConfig,
-    ): Pair<RawWebSocket, String>? {
+        cfg: ProxyConfig = configProvider(),
+        timeoutMs: Int = 8_000,
+    ): PooledWorkerSocket? {
         val dstEnc = URLEncoder.encode(fallbackDst, "UTF-8")
         val path = "/apiws?dst=$dstEnc&dc=$dc"
-        val cleanIp = cfg.effectiveCfCleanIp
+        val modes: List<Boolean> = when {
+            cfg.disableSecure -> listOf(false)
+            !cfg.autoPort80Fallback -> listOf(true)
+            else -> {
+                val preferTls = trySecureFirst.get() && (balancer?.isCfTlsBlocked() != true)
+                listOf(preferTls, !preferTls)
+            }
+        }
+
         for (workerDomain in availableDomains(workerDomains)) {
-            try {
-                val ws = RawWebSocket.connect(
-                    host = workerDomain,
-                    domain = workerDomain,
-                    timeoutMs = 8_000,
-                    path = path,
-                    secure = !cfg.disableSecure,
-                    bufferSize = cfg.bufferSize,
-                    dohProvider = cfg.dohProvider,
-                    ipPreference = cfg.ipPreference,
-                    cleanIpOverride = cleanIp,
-                )
-                reportSuccess(workerDomain)
-                return ws to workerDomain
-            } catch (e: CancellationException) {
-                throw e
-            } catch (exc: Exception) {
-                ProxyLogger.d("CF worker pool connect DC$dc via $workerDomain for $fallbackDst failed: ${exc.javaClass.simpleName}: ${exc.message}")
-                reportFailure(workerDomain, exc)
+            for ((idx, secure) in modes.withIndex()) {
+                try {
+                    val ws = connector(workerDomain, path, secure, timeoutMs, cfg)
+                    if (!cfg.disableSecure) {
+                        trySecureFirst.set(secure)
+                        if (!secure && cfg.autoPort80Fallback) {
+                            balancer?.markCfTlsBlocked()
+                        }
+                    }
+                    reportSuccess(workerDomain)
+                    return PooledWorkerSocket(ws, workerDomain, usedPort80 = !secure)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (exc: Exception) {
+                    ProxyLogger.d(
+                        "CF worker connect DC$dc via $workerDomain for $fallbackDst failed (tls=$secure): " +
+                            "${exc.javaClass.simpleName}: ${exc.message}"
+                    )
+                    if (idx + 1 < modes.size && shouldFallbackToAlternatePort(exc, attemptedSecure = secure)) {
+                        ProxyLogger.i(
+                            "CF worker $workerDomain failed on ${if (secure) "TLS :443" else "HTTP :80"} -> " +
+                                "trying ${if (secure) "HTTP :80" else "TLS :443"}"
+                        )
+                        continue
+                    }
+                    reportFailure(workerDomain, exc)
+                    break
+                }
             }
         }
         return null
@@ -1174,7 +1320,7 @@ class CfWorkerPool(
             refillAfterMs.clear()
         }
         exhaustedUntilMs.clear()
-        workerFailures.clear()
+        trySecureFirst.set(true)
         toCancel.forEach { it.cancel() }
         toClose.forEach { it.closeQuietly() }
         if (!isIdleHibernating() && !isOfflineProvider()) {
@@ -1198,7 +1344,7 @@ class CfWorkerPool(
             refillAfterMs.clear()
         }
         exhaustedUntilMs.clear()
-        workerFailures.clear()
+        trySecureFirst.set(true)
         toCancel.forEach { it.cancel() }
         toClose.forEach { it.closeQuietly() }
         if (!isIdleHibernating() && !isOfflineProvider()) {
@@ -1224,7 +1370,7 @@ class CfWorkerPool(
             refillAfterMs.clear()
         }
         exhaustedUntilMs.clear()
-        workerFailures.clear()
+        trySecureFirst.set(true)
         toCancel.forEach { it.cancel() }
         toClose.forEach { it.closeQuietly() }
     }

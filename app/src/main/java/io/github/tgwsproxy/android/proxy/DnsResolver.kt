@@ -99,7 +99,7 @@ object DnsResolver {
         val normDoh = dohProvider.trim().lowercase().ifEmpty { DOH_SYSTEM }
         val normPref = ipPreference.trim().lowercase().ifEmpty { IP_PREF_AUTO }
         val key = CacheKey(normHost, normDoh, normPref)
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         val cached = cache[key]
         if (cached != null && now < cached.expiresAtMs && cached.addresses.isNotEmpty()) {
             return cached.addresses

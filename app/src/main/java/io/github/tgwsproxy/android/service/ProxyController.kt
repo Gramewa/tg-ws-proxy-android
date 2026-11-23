@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.Immutable
 import io.github.tgwsproxy.android.data.AppSettings
 import io.github.tgwsproxy.android.data.SettingsRepository
+import io.github.tgwsproxy.android.proxy.ProxyClock
 import io.github.tgwsproxy.android.proxy.ProxyConfig
 import io.github.tgwsproxy.android.proxy.ProxyLogger
 import io.github.tgwsproxy.android.proxy.ProxyStats
@@ -123,7 +124,7 @@ object ProxyController {
             _settings.value = current.copy(wasRunning = true)
             _currentConfig.value = cfg
             _isRunning.value = true
-            startedAtMs = System.currentTimeMillis()
+            startedAtMs = ProxyClock.monotonicMs()
             startTicker()
             Result.success(Unit)
         } catch (exc: Exception) {
@@ -161,7 +162,7 @@ object ProxyController {
             _settings.value = current.copy(wasRunning = true)
             _currentConfig.value = cfg
             _isRunning.value = true
-            startedAtMs = System.currentTimeMillis()
+            startedAtMs = ProxyClock.monotonicMs()
             startTicker()
             Result.success(Unit)
         } catch (exc: Exception) {
@@ -178,8 +179,8 @@ object ProxyController {
 
     fun onNetworkChanged() {
         if (!_isRunning.value) return
-        val now = System.currentTimeMillis()
-        if (now - lastNetworkChangeMs < 1500L) return
+        val now = ProxyClock.monotonicMs()
+        if (lastNetworkChangeMs > 0L && now - lastNetworkChangeMs < 1500L) return
         lastNetworkChangeMs = now
         scope.launch(Dispatchers.IO) {
             runCatching {
@@ -375,7 +376,7 @@ object ProxyController {
             val initialSnap = ProxyStats.snapshot()
             var prevDown = initialSnap.bytesDown
             var prevUp = initialSnap.bytesUp
-            var prevTimeMs = System.currentTimeMillis()
+            var prevTimeMs = ProxyClock.monotonicMs()
             val downBuf = ArrayDeque<Float>(ThroughputTelemetry.HISTORY_POINTS).apply {
                 repeat(ThroughputTelemetry.HISTORY_POINTS) { addLast(0f) }
             }
@@ -400,10 +401,10 @@ object ProxyController {
                     val resetSnap = ProxyStats.snapshot()
                     prevDown = resetSnap.bytesDown
                     prevUp = resetSnap.bytesUp
-                    prevTimeMs = System.currentTimeMillis()
+                    prevTimeMs = ProxyClock.monotonicMs()
                 }
 
-                val nowMs = System.currentTimeMillis()
+                val nowMs = ProxyClock.monotonicMs()
                 val snap = ProxyStats.snapshot()
                 _statsSnapshot.value = snap
                 _uptimeSeconds.value = ((nowMs - startedAtMs) / 1000L).coerceAtLeast(0L)

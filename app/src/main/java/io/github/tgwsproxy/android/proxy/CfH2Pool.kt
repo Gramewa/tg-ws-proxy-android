@@ -286,7 +286,7 @@ class CfH2Pool(
             .build()
 
         suspend fun preflight(): Long {
-            val started = System.currentTimeMillis()
+            val started = ProxyClock.monotonicMs()
             val req = Request.Builder()
                 .url("https://$host/api")
                 .head()
@@ -302,7 +302,7 @@ class CfH2Pool(
                     val ray = resp.header("cf-ray") ?: "-"
                     throw IOException("CF /api preflight HTTP $code cf_ray=$ray")
                 }
-                val elapsed = (System.currentTimeMillis() - started).coerceAtLeast(1L)
+                val elapsed = (ProxyClock.monotonicMs() - started).coerceAtLeast(1L)
                 ProxyLogger.d("H2 lane=$laneId ready host=$host status=$code ms=$elapsed")
                 elapsed
             }
@@ -325,7 +325,7 @@ class CfH2Pool(
             }
 
             streamPermits.acquire()
-            val deadline = System.currentTimeMillis() + REQUEST_TIMEOUT_MS
+            val deadline = ProxyClock.monotonicMs() + REQUEST_TIMEOUT_MS
             while (true) {
                 synchronized(reserveLock) {
                     if (closed) {
@@ -338,7 +338,7 @@ class CfH2Pool(
                         return true
                     }
                 }
-                if (System.currentTimeMillis() >= deadline) {
+                if (ProxyClock.monotonicMs() >= deadline) {
                     streamPermits.release()
                     throw IOException("H2 lane capacity wait timed out")
                 }
@@ -415,7 +415,7 @@ class CfH2Pool(
                 throw e
             } catch (e: Exception) {
                 errors.incrementAndGet()
-                failedUntilMs = System.currentTimeMillis() + DOMAIN_COOLDOWN_MS
+                failedUntilMs = ProxyClock.monotonicMs() + DOMAIN_COOLDOWN_MS
                 balancer.reportFailure(baseDomain, tlsSpecific = false)
                 ProxyLogger.d("H2 lane=$laneId ch=$channelId req=$reqId replay=$replay failed: ${e.javaClass.simpleName}: ${e.message}")
                 throw e
@@ -440,7 +440,7 @@ class CfH2Pool(
     ) {
         @Volatile var closed = false
         @Volatile var transportError: Int? = null
-        @Volatile var lastProgressMs = System.currentTimeMillis()
+        @Volatile var lastProgressMs = ProxyClock.monotonicMs()
         @Volatile var delivering = false
 
         var downBytes = 0L
@@ -491,13 +491,13 @@ class CfH2Pool(
         }
 
         private suspend fun sendLocked(scope: CoroutineScope, body: ByteArray, replay: Boolean): Boolean {
-            val deadline = System.currentTimeMillis() + REQUEST_TIMEOUT_MS
+            val deadline = ProxyClock.monotonicMs() + REQUEST_TIMEOUT_MS
             while (true) {
                 if (closed) throw IOException("H2 channel closed")
                 val ok = synchronized(stateLock) { hasCapacity(body.size) }
                 if (ok) break
                 if (replay) return false
-                if (System.currentTimeMillis() >= deadline) {
+                if (ProxyClock.monotonicMs() >= deadline) {
                     throw IOException("H2 channel capacity wait timed out")
                 }
                 delay(20)
@@ -509,7 +509,7 @@ class CfH2Pool(
                 throw IOException("H2 channel closed")
             }
 
-            val now = System.currentTimeMillis()
+            val now = ProxyClock.monotonicMs()
             val replayPacket = if (replay) synchronized(stateLock) { findPacketLocked(body) } else null
             if (replay && (replayPacket == null || replayPacket.pendingJob != null || !isReplayDue(replayPacket, now))) {
                 lane.release(body.size)
@@ -556,7 +556,7 @@ class CfH2Pool(
         ) {
             try {
                 val reply = lane.post(body, channelId, replay)
-                lastProgressMs = System.currentTimeMillis()
+                lastProgressMs = ProxyClock.monotonicMs()
                 if (reply.isNotEmpty() && !closed) {
                     if (packet != null) {
                         val prefix = reply.copyOfRange(0, minOf(24, reply.size))
@@ -622,7 +622,7 @@ class CfH2Pool(
 
         suspend fun recoverLoop(scope: CoroutineScope) {
             while (!closed && scope.isActive) {
-                val now = System.currentTimeMillis()
+                val now = ProxyClock.monotonicMs()
                 val nextAction = synchronized(stateLock) {
                     if (closed) {
                         -2L to null
@@ -757,10 +757,10 @@ class CfH2Pool(
         if (closed) return null
         val cfg = configProvider()
         if (!cfg.h2Enabled) return null
-        if (cfg.autoPort80Fallback && balancer.isCfTlsBlocked()) {
+        val now = ProxyClock.monotonicMs()
+        if (cfg.autoPort80Fallback && balancer.isCfTlsBlocked(now)) {
             return null
         }
-        val now = System.currentTimeMillis()
         val hasReusableLane = synchronized(lock) {
             if (now < (setupRetryAfterMs[dc] ?: 0L)) return null
             lanes.values.any { !it.closed && now >= it.failedUntilMs }
@@ -780,7 +780,7 @@ class CfH2Pool(
         } catch (_: Exception) {
             timedOut = false
             synchronized(lock) {
-                setupRetryAfterMs[dc] = System.currentTimeMillis() + DOMAIN_COOLDOWN_MS
+                setupRetryAfterMs[dc] = ProxyClock.monotonicMs() + DOMAIN_COOLDOWN_MS
             }
             ProxyStats.h2Errors.incrementAndGet()
             ProxyLogger.w("[$label] H2 DC$dc setup failed; using WS for ${DOMAIN_COOLDOWN_MS / 1000}s")
@@ -788,7 +788,7 @@ class CfH2Pool(
         }
         if (timedOut) {
             synchronized(lock) {
-                setupRetryAfterMs[dc] = System.currentTimeMillis() + DOMAIN_COOLDOWN_MS
+                setupRetryAfterMs[dc] = ProxyClock.monotonicMs() + DOMAIN_COOLDOWN_MS
             }
             if (cfg.autoPort80Fallback) {
                 balancer.markCfTlsBlocked()
@@ -800,17 +800,47 @@ class CfH2Pool(
         return channel
     }
 
+    internal fun selectCandidateDomains(
+        dc: Int,
+        now: Long = ProxyClock.monotonicMs(),
+        limit: Int = 3,
+    ): List<Pair<String, String>> {
+        val domains = balancer.getDomainsForDc(dc, nowMs = now)
+        if (domains.isEmpty()) return emptyList()
+        val candidates = ArrayList<Pair<String, String>>(limit)
+        synchronized(lock) {
+            for (baseDomain in domains) {
+                if (balancer.shouldPreferPort80(baseDomain, nowMs = now) ||
+                    balancer.isDomainInCooldown(baseDomain, nowMs = now)
+                ) {
+                    continue
+                }
+                val host = "kws$dc.$baseDomain"
+                val existing = lanes[host]
+                val blockedUntil = maxOf(failedUntilMs[host] ?: 0L, existing?.failedUntilMs ?: 0L)
+                if (now < blockedUntil) continue
+                candidates.add(baseDomain to host)
+                if (candidates.size >= limit) break
+            }
+        }
+        return candidates
+    }
+
     private suspend fun openInternal(dc: Int, label: String): HttpChannel? {
         if (closed || dc !in DC_DEFAULT_IPS) return null
-        val domains = balancer.getDomainsForDc(dc)
+        val now = ProxyClock.monotonicMs()
+        val domains = balancer.getDomainsForDc(dc, nowMs = now)
         if (domains.isEmpty()) return null
-
-        val now = System.currentTimeMillis()
 
         // Fast path: reuse an already-established healthy lane for any top domain.
         val reusable = synchronized(lock) {
             var found: Pair<HttpLane, String>? = null
             for (baseDomain in domains) {
+                if (balancer.shouldPreferPort80(baseDomain, nowMs = now) ||
+                    balancer.isDomainInCooldown(baseDomain, nowMs = now)
+                ) {
+                    continue
+                }
                 val host = "kws$dc.$baseDomain"
                 val existing = lanes[host] ?: continue
                 if (existing.closed) continue
@@ -827,17 +857,7 @@ class CfH2Pool(
         }
 
         // Collect up to 3 unblocked candidates and race preflights with stagger (no global lock held!).
-        val candidates = ArrayList<Pair<String, String>>(3)
-        synchronized(lock) {
-            for (baseDomain in domains) {
-                val host = "kws$dc.$baseDomain"
-                val existing = lanes[host]
-                val blockedUntil = maxOf(failedUntilMs[host] ?: 0L, existing?.failedUntilMs ?: 0L)
-                if (now < blockedUntil) continue
-                candidates.add(baseDomain to host)
-                if (candidates.size >= 3) break
-            }
-        }
+        val candidates = selectCandidateDomains(dc, now = now, limit = 3)
         if (candidates.isEmpty()) return null
 
         val winner = AtomicReference<Triple<HttpLane, String, Long>?>(null)
@@ -875,7 +895,7 @@ class CfH2Pool(
                             if (!isActive || winner.get() != null) return@launch
                             ProxyStats.h2Errors.incrementAndGet()
                             synchronized(lock) {
-                                failedUntilMs[host] = System.currentTimeMillis() + DOMAIN_COOLDOWN_MS
+                                failedUntilMs[host] = ProxyClock.monotonicMs() + DOMAIN_COOLDOWN_MS
                             }
                             val tlsOrTimeout = exc is SSLException ||
                                 exc is SocketTimeoutException ||
@@ -913,7 +933,7 @@ class CfH2Pool(
 
         val adoptedLane = synchronized(lock) {
             val existing = lanes[candidateLane.host]
-            if (existing != null && !existing.closed && System.currentTimeMillis() >= existing.failedUntilMs) {
+            if (existing != null && !existing.closed && ProxyClock.monotonicMs() >= existing.failedUntilMs) {
                 existing
             } else {
                 lanes[candidateLane.host] = candidateLane
@@ -986,7 +1006,7 @@ class CfH2Pool(
                             }
                             channel.downBytes += body.size
                             ProxyStats.bytesDown.addAndGet(body.size.toLong())
-                            channel.lastProgressMs = System.currentTimeMillis()
+                            channel.lastProgressMs = ProxyClock.monotonicMs()
                         }
                     } catch (e: CancellationException) {
                         throw e

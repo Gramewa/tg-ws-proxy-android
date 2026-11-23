@@ -318,7 +318,7 @@ object ConnectivityTester {
         val port = if (secure) 443 else 80
         var raw: Socket? = null
         var active: Socket? = null
-        val startedAt = System.currentTimeMillis()
+        val startedAt = ProxyClock.monotonicMs()
         return try {
             val targetAddr = DnsResolver.resolve(
                 host = connectHost,
@@ -380,7 +380,7 @@ object ConnectivityTester {
                 p2 = p1
                 p1 = b
             }
-            val elapsedMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(1L)
+            val elapsedMs = (ProxyClock.monotonicMs() - startedAt).coerceAtLeast(1L)
             val firstLine = buf.toString(Charsets.UTF_8.name()).split("\r\n", limit = 2).firstOrNull().orEmpty()
             if (firstLine.contains("101")) {
                 DcConnectivityStatus.Ok(elapsedMs)

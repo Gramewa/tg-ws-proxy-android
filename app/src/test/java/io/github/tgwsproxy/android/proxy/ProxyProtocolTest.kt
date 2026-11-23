@@ -1,6 +1,9 @@
 package io.github.tgwsproxy.android.proxy
 
 import io.github.tgwsproxy.android.update.AppUpdater
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,11 +14,17 @@ import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
+import java.io.IOException
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketTimeoutException
+import java.nio.channels.ServerSocketChannel
 import java.security.MessageDigest
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import kotlin.concurrent.thread
 
 class ProxyProtocolTest {
 
@@ -662,9 +671,11 @@ class ProxyProtocolTest {
         assertEquals("", importedV1.cfCleanIp)
         assertEquals(DnsResolver.IP_PREF_AUTO, importedV1.ipPreference)
 
-        // Built-in updater recognizes v1.2.2 as newer than v1.2.1
+        // Built-in updater recognizes v1.2.2 and v1.3.0 as newer
         assertTrue(AppUpdater.isNewerVersion("1.2.1", "v1.2.2"))
         assertFalse(AppUpdater.isNewerVersion("1.2.2", "v1.2.2"))
+        assertTrue(AppUpdater.isNewerVersion("1.2.2", "v1.3.0"))
+        assertFalse(AppUpdater.isNewerVersion("1.3.0", "v1.3.0"))
 
         // Validation rejects malformed cfCleanIp and frontingSni
         assertNull(base.applyImportedJson("""{"cfCleanIp":"not-an-ip"}"""))
@@ -760,5 +771,358 @@ class ProxyProtocolTest {
             ProxyStats.onActiveRouteChanged = prevListener
             ProxyStats.reset()
         }
+    }
+
+    @Test
+    fun cfWorkerPoolCooldownPolicyMatchesV112AndSyncsRefillAfter() {
+        val pool = CfWorkerPool(configProvider = { ProxyConfig() })
+        val domains = listOf("w1.workers.dev", "w2.workers.dev")
+        val t0 = 5_000_000L
+        // Wall clock 20:00:00 UTC -> 4 hours (14_400_000ms) until 00:00 UTC
+        val wall20Utc = 20L * 3_600_000L
+
+        // 4xx other than 429 and non-IO exceptions must NOT disable the domain
+        pool.reportFailure("w1.workers.dev", WsHandshakeError(403, "Forbidden"), nowMs = t0, wallClockMs = wall20Utc)
+        pool.reportFailure("w1.workers.dev", WsHandshakeError(404, "Not Found"), nowMs = t0, wallClockMs = wall20Utc)
+        pool.reportFailure("w1.workers.dev", IllegalStateException("bug"), nowMs = t0, wallClockMs = wall20Utc)
+        assertEquals(2, pool.availableDomains(domains, nowMs = t0 + 1_000L).size)
+
+        // HTTP 429 disables w1 until next 00:00 UTC (14_400_000ms later)
+        pool.reportFailure("w1.workers.dev", WsHandshakeError(429, "Too Many Requests"), nowMs = t0, wallClockMs = wall20Utc)
+        assertEquals(listOf("w2.workers.dev"), pool.availableDomains(domains, nowMs = t0 + 1_000L))
+
+        // Active 429 cooldown must NOT be shortened by a subsequent 503 or IOException
+        pool.reportFailure("w1.workers.dev", WsHandshakeError(503, "Unavailable"), nowMs = t0 + 1_000L, wallClockMs = wall20Utc)
+        assertEquals(listOf("w2.workers.dev"), pool.availableDomains(domains, nowMs = t0 + CfWorkerPool.FAILURE_COOLDOWN_MS + 5_000L))
+        // After UTC midnight, w1 becomes available again
+        assertEquals(2, pool.availableDomains(domains, nowMs = t0 + 14_400_000L + 1L).size)
+
+        // Re-disable w1 (429) and w2 (503 -> 60s): when ALL workers are cooling, availableDomains() is EMPTY
+        pool.reportFailure("w1.workers.dev", WsHandshakeError(429, "Too Many Requests"), nowMs = t0, wallClockMs = wall20Utc)
+        pool.reportFailure("w2.workers.dev", WsHandshakeError(503, "Service Unavailable"), nowMs = t0 + 2_000L, wallClockMs = wall20Utc)
+        assertTrue(pool.availableDomains(domains, nowMs = t0 + 5_000L).isEmpty())
+
+        // deferIfAllWorkersPaused syncs refillAfterMs[dc] to the earliest expiring worker (w2: t0 + 2_000 + 60_000)
+        assertTrue(pool.deferIfAllWorkersPaused(dc = 2, workerDomains = domains, nowMs = t0 + 5_000L))
+        assertEquals(t0 + 2_000L + CfWorkerPool.FAILURE_COOLDOWN_MS, pool.nextRefillAfterMs(2))
+
+        // Once w2's 60s cooldown expires, w2 returns while w1 remains paused
+        assertEquals(listOf("w2.workers.dev"), pool.availableDomains(domains, nowMs = t0 + 2_000L + CfWorkerPool.FAILURE_COOLDOWN_MS + 1L))
+        assertFalse(pool.deferIfAllWorkersPaused(dc = 2, workerDomains = domains, nowMs = t0 + 2_000L + CfWorkerPool.FAILURE_COOLDOWN_MS + 1L))
+
+        // Plain network IOException also pauses worker for 60s
+        val tIo = t0 + 100_000L
+        pool.reportFailure("w2.workers.dev", IOException("connection reset"), nowMs = tIo, wallClockMs = wall20Utc)
+        assertTrue(pool.availableDomains(domains, nowMs = tIo + 30_000L).isEmpty())
+        assertEquals(listOf("w2.workers.dev"), pool.availableDomains(domains, nowMs = tIo + CfWorkerPool.FAILURE_COOLDOWN_MS + 1L))
+    }
+
+    @Test
+    fun cfWorkerPoolConnectOneFallsBackToHttp80AndRemembersMode(): Unit = runBlocking {
+        // Spin up a tiny loopback WS 101 server so RawWebSocket.connect yields a real socket instance.
+        val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
+        val serverThread = thread(isDaemon = true) {
+            while (!server.isClosed) {
+                val client = try { server.accept() } catch (_: Exception) { break }
+                thread(isDaemon = true) {
+                    try {
+                        val reader = client.getInputStream().bufferedReader(Charsets.US_ASCII)
+                        var wsKey = ""
+                        while (true) {
+                            val line = reader.readLine() ?: break
+                            if (line.isEmpty()) break
+                            if (line.startsWith("Sec-WebSocket-Key:", ignoreCase = true)) {
+                                wsKey = line.substringAfter(':').trim()
+                            }
+                        }
+                        val accept = RawWebSocket.computeWebSocketAccept(wsKey)
+                        val resp = "HTTP/1.1 101 Switching Protocols\r\n" +
+                            "Upgrade: websocket\r\n" +
+                            "Connection: Upgrade\r\n" +
+                            "Sec-WebSocket-Accept: $accept\r\n\r\n"
+                        client.getOutputStream().write(resp.toByteArray(Charsets.US_ASCII))
+                        client.getOutputStream().flush()
+                        // Hold open briefly until client closes
+                        client.getInputStream().read()
+                    } catch (_: Exception) {
+                    } finally {
+                        runCatching { client.close() }
+                    }
+                }
+            }
+        }
+        try {
+            val balancer = DomainBalancer()
+            val attempts = ArrayList<Pair<String, Boolean>>()
+            val cfg = ProxyConfig(disableSecure = false, autoPort80Fallback = true)
+            val pool = CfWorkerPool(
+                configProvider = { cfg },
+                balancer = balancer,
+                connector = { workerDomain, path, secure, timeoutMs, _ ->
+                    attempts.add(workerDomain to secure)
+                    if (secure) {
+                        // Simulate TCP connect timeout wrapped in TcpConnectFailedException
+                        throw TcpConnectFailedException("timeout", SocketTimeoutException("connect timed out"))
+                    }
+                    RawWebSocket.connect(
+                        host = "127.0.0.1",
+                        domain = workerDomain,
+                        timeoutMs = timeoutMs,
+                        path = path,
+                        secure = false,
+                        portOverride = server.localPort,
+                    )
+                },
+            )
+
+            // First call tries TLS :443, hits timeout, falls back to HTTP :80 and succeeds
+            val first = pool.connectOne(listOf("w1.workers.dev"), "149.154.167.51", dc = 2, cfg = cfg)
+            assertNotNull(first)
+            first!!
+            assertTrue(first.usedPort80)
+            assertEquals("w1.workers.dev", first.workerDomain)
+            assertEquals(listOf("w1.workers.dev" to true, "w1.workers.dev" to false), attempts)
+            assertFalse(pool.isTryingSecureFirst())
+            assertTrue(balancer.isCfTlsBlocked())
+            first.ws.closeQuietly()
+
+            // Second call starts straight on HTTP :80 without retrying blocked TLS :443
+            attempts.clear()
+            val second = pool.connectOne(listOf("w1.workers.dev"), "149.154.167.51", dc = 2, cfg = cfg)
+            assertNotNull(second)
+            assertTrue(second!!.usedPort80)
+            assertEquals(listOf("w1.workers.dev" to false), attempts)
+            second.ws.closeQuietly()
+
+            // With autoPort80Fallback = false, TLS timeout must NOT fall back to :80 and must cooldown worker
+            val strictCfg = cfg.copy(autoPort80Fallback = false)
+            pool.reset()
+            attempts.clear()
+            val strictRes = pool.connectOne(listOf("w1.workers.dev"), "149.154.167.51", dc = 2, cfg = strictCfg)
+            assertNull(strictRes)
+            assertEquals(listOf("w1.workers.dev" to true), attempts)
+            assertTrue(pool.availableDomains(listOf("w1.workers.dev")).isEmpty())
+        } finally {
+            runCatching { server.close() }
+            serverThread.join(500L)
+        }
+    }
+
+    @Test
+    fun rawWebSocketConnectEnforcesSingleDeadlineAndSendInitSucceedsOrCloses(): Unit = runBlocking {
+        // Slowloris server: drips one HTTP header every 200ms so per-line timeouts would hang for seconds
+        val slowServer = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
+        val slowThread = thread(isDaemon = true) {
+            val client = try { slowServer.accept() } catch (_: Exception) { return@thread }
+            try {
+                val out = client.getOutputStream()
+                out.write("HTTP/1.1 101 Switching Protocols\r\n".toByteArray(Charsets.US_ASCII))
+                out.flush()
+                repeat(15) { i ->
+                    Thread.sleep(200L)
+                    out.write("X-Drip-$i: slow\r\n".toByteArray(Charsets.US_ASCII))
+                    out.flush()
+                }
+            } catch (_: Exception) {
+            } finally {
+                runCatching { client.close() }
+            }
+        }
+        try {
+            val started = ProxyClock.monotonicMs()
+            var threwTimeout = false
+            try {
+                RawWebSocket.connect(
+                    host = "127.0.0.1",
+                    domain = "127.0.0.1",
+                    timeoutMs = 450,
+                    secure = false,
+                    portOverride = slowServer.localPort,
+                )
+            } catch (_: SocketTimeoutException) {
+                threwTimeout = true
+            }
+            val elapsed = ProxyClock.monotonicMs() - started
+            assertTrue("Expected SocketTimeoutException on slowloris server", threwTimeout)
+            assertTrue("Expected total connect time < 1200ms, got ${elapsed}ms", elapsed < 1200L)
+        } finally {
+            runCatching { slowServer.close() }
+            slowThread.join(500L)
+        }
+
+        // Good server: verify connect + sendInit + bounded close()
+        val okServer = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
+        val received = ByteArrayOutputStream()
+        val okThread = thread(isDaemon = true) {
+            val client = try { okServer.accept() } catch (_: Exception) { return@thread }
+            try {
+                val reader = client.getInputStream().bufferedReader(Charsets.US_ASCII)
+                var wsKey = ""
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (line.isEmpty()) break
+                    if (line.startsWith("Sec-WebSocket-Key:", ignoreCase = true)) {
+                        wsKey = line.substringAfter(':').trim()
+                    }
+                }
+                val accept = RawWebSocket.computeWebSocketAccept(wsKey)
+                client.getOutputStream().write(
+                    ("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n" +
+                        "Connection: Upgrade\r\nSec-WebSocket-Accept: $accept\r\n\r\n").toByteArray(Charsets.US_ASCII)
+                )
+                client.getOutputStream().flush()
+                val buf = ByteArray(1024)
+                val n = client.getInputStream().read(buf)
+                if (n > 0) received.write(buf, 0, n)
+            } catch (_: Exception) {
+            } finally {
+                runCatching { client.close() }
+            }
+        }
+        try {
+            val ws = RawWebSocket.connect(
+                host = "127.0.0.1",
+                domain = "127.0.0.1",
+                timeoutMs = 2_000,
+                secure = false,
+                portOverride = okServer.localPort,
+            )
+            ws.sendInit(ByteArray(64) { 0x42 }, timeoutMs = 2_000L)
+            ws.close(timeoutMs = 500L)
+            assertTrue(ws.isClosed)
+            okThread.join(1_000L)
+            assertTrue("Expected masked WS frame bytes to arrive", received.size() >= 70)
+        } finally {
+            runCatching { okServer.close() }
+            okThread.join(500L)
+        }
+    }
+
+    @Test
+    fun clientDisconnectWatcherCancelsDialOnEofAndPreservesEarlyBytesFifo(): Unit = runBlocking {
+        val watcher = ClientDisconnectWatcher()
+        watcher.start()
+        val server = ServerSocketChannel.open().apply {
+            configureBlocking(true)
+            socket().reuseAddress = true
+            socket().bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0))
+        }
+        try {
+            // Subtest A: client closes socket mid-dial -> guard cancels immediately
+            val clientA = Socket("127.0.0.1", server.socket().localPort)
+            val chanA = server.accept()
+            val preA = BufferedClientInputStream(chanA.socket().getInputStream(), 1024)
+            val guardA = watcher.createGuard(chanA, preA)
+            thread(isDaemon = true) {
+                Thread.sleep(60L)
+                runCatching { clientA.close() }
+            }
+            val startA = ProxyClock.monotonicMs()
+            var cancelledA = false
+            try {
+                guardA.guard {
+                    delay(10_000L)
+                }
+            } catch (_: CancellationException) {
+                cancelledA = true
+            }
+            val elapsedA = ProxyClock.monotonicMs() - startA
+            assertTrue("Expected dial to cancel when client closed", cancelledA)
+            assertTrue("Expected fast cancellation (<1000ms), took ${elapsedA}ms", elapsedA < 1000L)
+            runCatching { chanA.close() }
+            runCatching { clientA.close() }
+
+            // Subtest B: client sends early bytes before & during dial -> exact FIFO preserved after dial
+            val clientB = Socket("127.0.0.1", server.socket().localPort)
+            clientB.tcpNoDelay = true
+            val chanB = server.accept()
+            val preB = BufferedClientInputStream(chanB.socket().getInputStream(), 1024)
+            val dataB = DataInputStream(preB)
+
+            // Send initial 8 bytes; server consumes first 4, leaving 4 inside BufferedClientInputStream.readBuf
+            clientB.getOutputStream().write("ABCD1234".toByteArray(Charsets.US_ASCII))
+            clientB.getOutputStream().flush()
+            val init4 = ByteArray(4)
+            dataB.readFully(init4)
+            assertEquals("ABCD", String(init4, Charsets.US_ASCII))
+
+            val guardB = watcher.createGuard(chanB, preB)
+            thread(isDaemon = true) {
+                Thread.sleep(40L)
+                clientB.getOutputStream().write("EARLY_DATA".toByteArray(Charsets.US_ASCII))
+                clientB.getOutputStream().flush()
+            }
+            val dialResult = guardB.guard {
+                delay(150L)
+                "connected"
+            }
+            assertEquals("connected", dialResult)
+            // Send trailing bytes after guard returned channel to blocking mode
+            clientB.getOutputStream().write("_TAIL".toByteArray(Charsets.US_ASCII))
+            clientB.getOutputStream().flush()
+
+            val rest = ByteArray("1234EARLY_DATA_TAIL".length)
+            dataB.readFully(rest)
+            assertEquals("1234EARLY_DATA_TAIL", String(rest, Charsets.US_ASCII))
+            runCatching { chanB.close() }
+            runCatching { clientB.close() }
+
+            // Subtest C: client sends early bytes AND THEN closes mid-dial -> guard still cancels
+            val clientC = Socket("127.0.0.1", server.socket().localPort)
+            val chanC = server.accept()
+            val preC = BufferedClientInputStream(chanC.socket().getInputStream(), 1024)
+            val guardC = watcher.createGuard(chanC, preC)
+            thread(isDaemon = true) {
+                Thread.sleep(40L)
+                clientC.getOutputStream().write("HELLO".toByteArray(Charsets.US_ASCII))
+                clientC.getOutputStream().flush()
+                Thread.sleep(30L)
+                runCatching { clientC.close() }
+            }
+            var cancelledC = false
+            try {
+                guardC.guard {
+                    delay(10_000L)
+                }
+            } catch (_: CancellationException) {
+                cancelledC = true
+            }
+            assertTrue("Expected dial to cancel after client wrote bytes and closed", cancelledC)
+            runCatching { chanC.close() }
+            runCatching { clientC.close() }
+            Unit
+        } finally {
+            watcher.stop()
+            runCatching { server.close() }
+        }
+    }
+
+    @Test
+    fun cfH2PoolSkipsTlsBlockedAndCoolingDomainsInCandidateSelection() {
+        val balancer = DomainBalancer()
+        balancer.updateDomainsList(listOf("alpha.co.uk", "beta.co.uk", "gamma.co.uk"))
+        val h2Pool = CfH2Pool(balancer) { ProxyConfig() }
+        try {
+            val t0 = 9_000_000L
+            // Put alpha.co.uk in hard cooldown -> H2 candidate list skips alpha.co.uk
+            balancer.reportFailure("alpha.co.uk", tlsSpecific = false, nowMs = t0)
+            val afterCooldown = h2Pool.selectCandidateDomains(dc = 2, now = t0 + 1_000L).map { it.first }
+            assertFalse(afterCooldown.contains("alpha.co.uk"))
+            assertEquals(setOf("beta.co.uk", "gamma.co.uk"), afterCooldown.toSet())
+
+            // TLS-specific failure marks network-wide TLS block -> H2 skips all candidates
+            balancer.reportFailure("beta.co.uk", tlsSpecific = true, nowMs = t0 + 2_000L)
+            assertTrue(h2Pool.selectCandidateDomains(dc = 2, now = t0 + 3_000L).isEmpty())
+        } finally {
+            h2Pool.close()
+        }
+    }
+
+    @Test
+    fun proxyClockMonotonicIsPositiveAndNonDecreasing() {
+        val t1 = ProxyClock.monotonicMs()
+        val t2 = ProxyClock.monotonicMs()
+        assertTrue("Expected monotonicMs > 0, got $t1", t1 > 0L)
+        assertTrue("Expected monotonic clock non-decreasing: $t1 -> $t2", t2 >= t1)
     }
 }

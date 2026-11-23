@@ -59,7 +59,7 @@ class DomainBalancer {
         domain: String,
         latencyMs: Long,
         usedPort80: Boolean = false,
-        nowMs: Long = System.currentTimeMillis(),
+        nowMs: Long = ProxyClock.monotonicMs(),
     ): Boolean {
         synchronized(lock) {
             val h = health.getOrPut(domain) { DomainHealth() }
@@ -85,7 +85,7 @@ class DomainBalancer {
     fun reportFailure(
         domain: String,
         tlsSpecific: Boolean = false,
-        nowMs: Long = System.currentTimeMillis(),
+        nowMs: Long = ProxyClock.monotonicMs(),
     ) {
         synchronized(lock) {
             val h = health.getOrPut(domain) { DomainHealth() }
@@ -102,13 +102,13 @@ class DomainBalancer {
         }
     }
 
-    fun isCfTlsBlocked(nowMs: Long = System.currentTimeMillis()): Boolean {
+    fun isCfTlsBlocked(nowMs: Long = ProxyClock.monotonicMs()): Boolean {
         synchronized(lock) {
             return cfTlsBlockedUntilMs > nowMs
         }
     }
 
-    fun markCfTlsBlocked(nowMs: Long = System.currentTimeMillis()) {
+    fun markCfTlsBlocked(nowMs: Long = ProxyClock.monotonicMs()) {
         synchronized(lock) {
             cfTlsBlockedUntilMs = maxOf(cfTlsBlockedUntilMs, nowMs + CF_TLS_BLOCKED_WINDOW_MS)
         }
@@ -123,7 +123,7 @@ class DomainBalancer {
         }
     }
 
-    fun shouldPreferPort80(domain: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+    fun shouldPreferPort80(domain: String, nowMs: Long = ProxyClock.monotonicMs()): Boolean {
         synchronized(lock) {
             if (cfTlsBlockedUntilMs > nowMs) return true
             val until = health[domain]?.tlsFailedUntilMs ?: 0L
@@ -131,13 +131,13 @@ class DomainBalancer {
         }
     }
 
-    fun isDomainInCooldown(domain: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+    fun isDomainInCooldown(domain: String, nowMs: Long = ProxyClock.monotonicMs()): Boolean {
         synchronized(lock) {
             return (health[domain]?.cooldownUntilMs ?: 0L) > nowMs
         }
     }
 
-    fun applyProbeWinner(domain: String, latencyMs: Long, nowMs: Long = System.currentTimeMillis()) {
+    fun applyProbeWinner(domain: String, latencyMs: Long, nowMs: Long = ProxyClock.monotonicMs()) {
         val norm = domain.trim().lowercase()
         if (norm.isEmpty()) return
         synchronized(lock) {
@@ -166,7 +166,7 @@ class DomainBalancer {
         }
     }
 
-    fun getDomainsForDc(dcId: Int, nowMs: Long = System.currentTimeMillis()): List<String> {
+    fun getDomainsForDc(dcId: Int, nowMs: Long = ProxyClock.monotonicMs()): List<String> {
         synchronized(lock) {
             if (domains.isEmpty()) return emptyList()
             val currentDomain = dcToDomain[dcId]

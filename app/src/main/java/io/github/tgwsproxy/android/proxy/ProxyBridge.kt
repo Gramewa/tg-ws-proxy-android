@@ -17,7 +17,6 @@ import java.io.EOFException
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -129,6 +128,7 @@ object ProxyBridge {
         protoTag: ByteArray,
         cfProxyPool: CfProxyWsPool? = null,
         relayDispatcher: CoroutineDispatcher = Dispatchers.IO,
+        clientSetup: ClientSetupGuard = ClientSetupGuard.NOOP,
     ): Boolean {
         val ipTable = if (isTestDc) DC_TEST_IPS else DC_DEFAULT_IPS
         val fallbackDst = ipTable[dc]
@@ -161,12 +161,13 @@ object ProxyBridge {
                         config = config,
                         cfWorkerPool = cfWorkerPool,
                         relayDispatcher = relayDispatcher,
+                        clientSetup = clientSetup,
                     )
                     if (ok) return true
                 }
                 "cf" -> {
                     if (isMedia && h2Pool != null) {
-                        val channel = h2Pool.open(dc, label)
+                        val channel = clientSetup.guard { h2Pool.open(dc, label) }
                         if (channel != null) {
                             ProxyStats.connectionsH2.incrementAndGet()
                             ProxyStats.connectionsCfproxy.incrementAndGet()
@@ -187,6 +188,7 @@ object ProxyBridge {
                         balancer = balancer,
                         cfProxyPool = cfProxyPool,
                         relayDispatcher = relayDispatcher,
+                        clientSetup = clientSetup,
                     )
                     if (ok) return true
                 }
@@ -200,6 +202,7 @@ object ProxyBridge {
                         ctx = ctx,
                         bufferSize = config.bufferSize,
                         relayDispatcher = relayDispatcher,
+                        clientSetup = clientSetup,
                     )
                     if (ok) return true
                 }
@@ -220,6 +223,7 @@ object ProxyBridge {
         config: ProxyConfig,
         cfWorkerPool: CfWorkerPool,
         relayDispatcher: CoroutineDispatcher,
+        clientSetup: ClientSetupGuard,
     ): Boolean {
         val mediaTag = if (isMedia) " media" else ""
         val workerDomains = config.cfproxyWorkerDomains
@@ -229,52 +233,43 @@ object ProxyBridge {
         val pooled = if (isTestDc) null else cfWorkerPool.get(dc, fallbackDst, workerDomains)
         if (pooled != null) {
             try {
-                pooled.first.send(relayInit)
-                ws = pooled.first
-                ProxyLogger.i("[$label] DC$dc$mediaTag -> CF worker pool hit via ${pooled.second} for $fallbackDst")
+                pooled.ws.sendInit(relayInit)
+                ws = pooled.ws
+                val portTag = if (pooled.usedPort80) " :80" else ""
+                ProxyLogger.i("[$label] DC$dc$mediaTag -> CF worker pool hit via ${pooled.workerDomain}$portTag for $fallbackDst")
             } catch (e: CancellationException) {
-                pooled.first.closeQuietly()
+                pooled.ws.closeQuietly()
                 throw e
             } catch (exc: Exception) {
-                pooled.first.closeQuietly()
+                pooled.ws.closeQuietly()
                 ProxyLogger.d("[$label] Stale CF worker pooled socket for DC$dc (${exc.message}), reconnecting fresh")
             }
         }
 
         if (ws == null) {
-            val dstEnc = URLEncoder.encode(fallbackDst, "UTF-8")
-            val path = "/apiws?dst=$dstEnc&dc=$dc"
-            val cleanIp = config.effectiveCfCleanIp
-            for (workerDomain in cfWorkerPool.availableDomains(workerDomains)) {
-                ProxyLogger.i("[$label] DC$dc$mediaTag -> trying CF worker $workerDomain for $fallbackDst")
-                try {
-                    val candidate = RawWebSocket.connect(
-                        host = workerDomain,
-                        domain = workerDomain,
-                        timeoutMs = 8_000,
-                        path = path,
-                        secure = !config.disableSecure,
-                        bufferSize = config.bufferSize,
-                        dohProvider = config.dohProvider,
-                        ipPreference = config.ipPreference,
-                        cleanIpOverride = cleanIp,
-                    )
-                    try {
-                        candidate.send(relayInit)
-                    } catch (exc: Exception) {
-                        candidate.closeQuietly()
-                        throw exc
-                    }
-                    cfWorkerPool.reportSuccess(workerDomain)
-                    ws = candidate
-                    break
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (exc: Exception) {
-                    cfWorkerPool.reportFailure(workerDomain, exc)
-                    ProxyLogger.w("[$label] DC$dc$mediaTag CF worker $workerDomain failed: ${exc.javaClass.simpleName}: ${exc.message}")
-                }
+            val connected = clientSetup.guard {
+                cfWorkerPool.connectOne(
+                    workerDomains = workerDomains,
+                    fallbackDst = fallbackDst,
+                    dc = dc,
+                    cfg = config,
+                    timeoutMs = 10_000,
+                )
+            } ?: return false
+            try {
+                connected.ws.sendInit(relayInit)
+            } catch (e: CancellationException) {
+                connected.ws.closeQuietly()
+                throw e
+            } catch (exc: Exception) {
+                connected.ws.closeQuietly()
+                cfWorkerPool.reportFailure(connected.workerDomain, exc)
+                ProxyLogger.w("[$label] DC$dc$mediaTag CF worker ${connected.workerDomain} init failed: ${exc.javaClass.simpleName}: ${exc.message}")
+                return false
             }
+            val portTag = if (connected.usedPort80) " :80" else ""
+            ProxyLogger.i("[$label] DC$dc$mediaTag -> CF worker ${connected.workerDomain}$portTag for $fallbackDst")
+            ws = connected.ws
         }
 
         val readyWs = ws ?: return false
@@ -305,6 +300,7 @@ object ProxyBridge {
         balancer: DomainBalancer,
         cfProxyPool: CfProxyWsPool?,
         relayDispatcher: CoroutineDispatcher,
+        clientSetup: ClientSetupGuard,
     ): Boolean {
         val mediaTag = if (isMedia) " media" else ""
 
@@ -312,7 +308,7 @@ object ProxyBridge {
         val pooled = cfProxyPool?.get(dc)
         if (pooled != null) {
             try {
-                pooled.ws.send(relayInit)
+                pooled.ws.sendInit(relayInit)
                 val routeTag = if (pooled.usedPort80) "cf-p80" else "cf"
                 val liveRoute = when {
                     config.disableSecure -> ActiveRoute.CF_HTTP80
@@ -349,32 +345,36 @@ object ProxyBridge {
             else -> "TLS 443"
         }
         ProxyLogger.i("[$label] DC$dc$mediaTag -> trying CF proxy ($modeDesc)")
-        val connectStarted = System.currentTimeMillis()
+        val connectStarted = ProxyClock.monotonicMs()
         val orderedDomains = balancer.getDomainsForDc(dc)
         if (orderedDomains.isEmpty()) return false
 
         // Race first wave (up to 3 top-ranked domains), then a second wave of 3 if all failed.
-        var winner = raceCfDomains(
-            dc = dc,
-            candidates = orderedDomains.take(3),
-            config = config,
-            balancer = balancer,
-            label = label,
-            mediaTag = mediaTag,
-        )
-        if (winner == null && orderedDomains.size > 3) {
-            winner = raceCfDomains(
+        var winner = clientSetup.guard {
+            val firstWave = raceCfDomains(
                 dc = dc,
-                candidates = orderedDomains.drop(3).take(3),
+                candidates = orderedDomains.take(3),
                 config = config,
                 balancer = balancer,
                 label = label,
                 mediaTag = mediaTag,
             )
+            if (firstWave != null || orderedDomains.size <= 3) {
+                firstWave
+            } else {
+                raceCfDomains(
+                    dc = dc,
+                    candidates = orderedDomains.drop(3).take(3),
+                    config = config,
+                    balancer = balancer,
+                    label = label,
+                    mediaTag = mediaTag,
+                )
+            }
         }
         if (winner == null) return false
 
-        val setupMs = System.currentTimeMillis() - connectStarted
+        val setupMs = ProxyClock.monotonicMs() - connectStarted
         val routeTag = if (winner.usedPort80) "cf-p80" else "cf"
         val liveRoute = when {
             winner.usedPort80 && config.disableSecure -> ActiveRoute.CF_HTTP80
@@ -389,7 +389,7 @@ object ProxyBridge {
         ProxyStats.connectionsCfproxy.incrementAndGet()
         ProxyStats.setActiveRoute(liveRoute)
         try {
-            winner.ws.send(relayInit)
+            winner.ws.sendInit(relayInit)
         } catch (exc: Exception) {
             winner.ws.closeQuietly()
             throw exc
@@ -558,7 +558,7 @@ object ProxyBridge {
         label: String,
         mediaTag: String,
     ): CfConnectWinner? {
-        val started = System.currentTimeMillis()
+        val started = ProxyClock.monotonicMs()
         return try {
             val ws = RawWebSocket.connect(
                 host = domain,
@@ -571,7 +571,7 @@ object ProxyBridge {
                 ipPreference = config.ipPreference,
                 cleanIpOverride = cleanIp,
             )
-            val rtt = (System.currentTimeMillis() - started).coerceAtLeast(1L)
+            val rtt = (ProxyClock.monotonicMs() - started).coerceAtLeast(1L)
             CfConnectWinner(ws, baseDomain, usedPort80 = !secure, rttMs = rtt)
         } catch (e: CancellationException) {
             throw e
@@ -602,7 +602,7 @@ object ProxyBridge {
 
         return coroutineScope {
             val tlsJob = launch(Dispatchers.IO) {
-                val started = System.currentTimeMillis()
+                val started = ProxyClock.monotonicMs()
                 try {
                     val ws = RawWebSocket.connect(
                         host = domain,
@@ -615,7 +615,7 @@ object ProxyBridge {
                         ipPreference = config.ipPreference,
                         cleanIpOverride = cleanIp,
                     )
-                    val rtt = (System.currentTimeMillis() - started).coerceAtLeast(1L)
+                    val rtt = (ProxyClock.monotonicMs() - started).coerceAtLeast(1L)
                     val win = CfConnectWinner(ws, baseDomain, usedPort80 = false, rttMs = rtt)
                     if (winnerRef.compareAndSet(null, win)) {
                         if (!done.complete(win)) {
@@ -650,7 +650,7 @@ object ProxyBridge {
                     }
                     return@launch
                 }
-                val started = System.currentTimeMillis()
+                val started = ProxyClock.monotonicMs()
                 try {
                     val ws = RawWebSocket.connect(
                         host = domain,
@@ -663,7 +663,7 @@ object ProxyBridge {
                         ipPreference = config.ipPreference,
                         cleanIpOverride = cleanIp,
                     )
-                    val rtt = (System.currentTimeMillis() - started).coerceAtLeast(1L)
+                    val rtt = (ProxyClock.monotonicMs() - started).coerceAtLeast(1L)
                     val win = CfConnectWinner(ws, baseDomain, usedPort80 = true, rttMs = rtt)
                     if (winnerRef.compareAndSet(null, win)) {
                         if (!done.complete(win)) {
@@ -721,9 +721,10 @@ object ProxyBridge {
         ctx: CryptoCtx,
         bufferSize: Int,
         relayDispatcher: CoroutineDispatcher,
+        clientSetup: ClientSetupGuard,
     ): Boolean = withContext(relayDispatcher) {
         val key = TcpEndpoint(dst, port)
-        val now = System.currentTimeMillis()
+        val now = ProxyClock.monotonicMs()
         val retryAt = tcpRetryAfterMs[key] ?: 0L
         if (now < retryAt || !tcpConnecting.add(key)) {
             ProxyLogger.d("[$label] TCP fallback to $dst:$port skipped (backoff or connecting)")
@@ -746,10 +747,21 @@ object ProxyBridge {
                     remote.receiveBufferSize = bufferSize
                     remote.sendBufferSize = bufferSize
                 }
-                remote.connect(InetSocketAddress(dst, port), 8_000)
-                val remoteOut = remote.getOutputStream()
-                remoteOut.write(relayInit)
-                remoteOut.flush()
+                clientSetup.guard {
+                    val dialCancel = coroutineContext[Job]?.invokeOnCompletion { cause ->
+                        if (cause != null) {
+                            try { remote.close() } catch (_: Exception) {}
+                        }
+                    }
+                    try {
+                        remote.connect(InetSocketAddress(dst, port), 8_000)
+                        val remoteOut = remote.getOutputStream()
+                        remoteOut.write(relayInit)
+                        remoteOut.flush()
+                    } finally {
+                        dialCancel?.dispose()
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (exc: Exception) {
@@ -757,7 +769,7 @@ object ProxyBridge {
                 tcpFailures[key] = failures
                 val exp = min(failures - 1, 7)
                 val delayMs = min(TCP_BACKOFF_INITIAL_MS shl exp, TCP_BACKOFF_MAX_MS)
-                tcpRetryAfterMs[key] = System.currentTimeMillis() + delayMs
+                tcpRetryAfterMs[key] = ProxyClock.monotonicMs() + delayMs
                 ProxyLogger.w("[$label] TCP fallback to $dst:$port failed: ${exc.javaClass.simpleName}: ${exc.message}; retry in ${delayMs / 1000}s")
                 try { remote.close() } catch (_: Exception) {}
                 return@withContext false
@@ -792,7 +804,7 @@ object ProxyBridge {
         var downBytes = 0L
         var upPackets = 0L
         var downPackets = 0L
-        val startTime = System.currentTimeMillis()
+        val startTime = ProxyClock.monotonicMs()
         val closeReason = AtomicReference("normal")
 
         val cancelHandle = coroutineContext[Job]?.invokeOnCompletion { cause ->
@@ -808,9 +820,9 @@ object ProxyBridge {
                     while (isActive && !ws.isClosed) {
                         delay(WS_HEARTBEAT_IDLE_MS)
                         if (ws.isClosed) break
-                        val idleMs = System.currentTimeMillis() - ws.lastRecvMs
+                        val idleMs = ProxyClock.monotonicMs() - ws.lastRecvMs
                         if (idleMs < WS_HEARTBEAT_IDLE_MS) continue
-                        val pingSentMs = System.currentTimeMillis()
+                        val pingSentMs = ProxyClock.monotonicMs()
                         try {
                             ws.ping()
                         } catch (_: Exception) {
@@ -909,7 +921,7 @@ object ProxyBridge {
             }
         } finally {
             cancelHandle?.dispose()
-            val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
+            val elapsedSec = (ProxyClock.monotonicMs() - startTime) / 1000.0
             ProxyLogger.i(
                 "[$label] $dcTag WS session closed (${closeReason.get()}): " +
                     "^${humanBytes(upBytes)} ($upPackets pkts) " +
