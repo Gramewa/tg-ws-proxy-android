@@ -806,6 +806,13 @@ object ProxyBridge {
         var downPackets = 0L
         val startTime = ProxyClock.monotonicMs()
         val closeReason = AtomicReference("normal")
+        val firstFinisher = AtomicBoolean(false)
+
+        fun recordCloseReason(reason: String) {
+            if (firstFinisher.compareAndSet(false, true)) {
+                closeReason.set(reason)
+            }
+        }
 
         val cancelHandle = coroutineContext[Job]?.invokeOnCompletion { cause ->
             if (cause != null) {
@@ -826,14 +833,14 @@ object ProxyBridge {
                         try {
                             ws.ping()
                         } catch (_: Exception) {
-                            closeReason.compareAndSet("normal", "upstream: ping_failed")
+                            recordCloseReason("upstream: ping_failed")
                             ws.closeQuietly()
                             stream.close()
                             break
                         }
                         delay(WS_HEARTBEAT_PONG_TIMEOUT_MS)
                         if (!ws.isClosed && ws.lastRecvMs < pingSentMs && ws.lastPongMs < pingSentMs) {
-                            closeReason.compareAndSet("normal", "upstream: pong_timeout")
+                            recordCloseReason("upstream: pong_timeout")
                             ProxyLogger.d("[$label] $dcTag WS heartbeat pong timeout; closing dead socket")
                             ws.closeQuietly()
                             stream.close()
@@ -850,6 +857,7 @@ object ProxyBridge {
                         while (true) {
                             val n = stream.read(buf)
                             if (n <= 0) {
+                                recordCloseReason("normal")
                                 if (splitter != null) {
                                     val tail = splitter.flush()
                                     if (tail.isNotEmpty()) {
@@ -880,7 +888,7 @@ object ProxyBridge {
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        closeReason.compareAndSet("normal", "client: ${e.javaClass.simpleName}")
+                        recordCloseReason("client: ${e.javaClass.simpleName}")
                         ProxyLogger.d("[$label] tcp->ws ended: ${e.message}")
                     } finally {
                         ws.closeQuietly()
@@ -892,7 +900,9 @@ object ProxyBridge {
                         while (true) {
                             val data = ws.recv()
                             if (data == null) {
-                                closeReason.compareAndSet("normal", "upstream: ws_close")
+                                val code = ws.lastCloseCode
+                                val reason = if (code != null) "upstream: ws_close($code)" else "upstream: ws_close"
+                                recordCloseReason(reason)
                                 break
                             }
                             val n = data.size.toLong()
@@ -906,9 +916,9 @@ object ProxyBridge {
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: EOFException) {
-                        closeReason.compareAndSet("normal", "upstream: tcp_reset")
+                        recordCloseReason("upstream: tcp_reset")
                     } catch (e: Exception) {
-                        closeReason.compareAndSet("normal", "upstream: ${e.javaClass.simpleName}")
+                        recordCloseReason("upstream: ${e.javaClass.simpleName}")
                         ProxyLogger.d("[$label] ws->tcp ended: ${e.message}")
                     } finally {
                         stream.close()

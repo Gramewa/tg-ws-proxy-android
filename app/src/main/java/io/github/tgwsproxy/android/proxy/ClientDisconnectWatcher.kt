@@ -5,8 +5,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
 import java.nio.ByteBuffer
+import java.nio.channels.ClosedChannelException
 import java.nio.channels.ClosedSelectorException
+import java.nio.channels.IllegalBlockingModeException
 import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.nio.channels.SocketChannel
@@ -17,6 +20,92 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.coroutineContext
+
+/**
+ * Direct blocking [InputStream] over a [SocketChannel] that reads via [SocketChannel.read]
+ * instead of [java.net.Socket.getInputStream] (`sun.nio.ch.SocketAdaptor`).
+ *
+ * On Android ART (libcore/ojluni, where JDK-4509080 is unfixed), `SocketAdaptor.SocketInputStream`
+ * holds `channel.blockingLock()` across the entire blocking `read()`, which deadlocks against
+ * `SocketAdaptor.getOutputStream()` (`Channels.newOutputStream` -> `Channels.writeFully`), which
+ * also synchronizes on `channel.blockingLock()`. Calling [SocketChannel.read] and
+ * [SocketChannel.write] directly uses separate internal `readLock` and `writeLock`, allowing true
+ * full-duplex concurrent I/O on all Android versions.
+ */
+class SocketChannelInputStream(
+    private val channel: SocketChannel,
+) : InputStream() {
+    private val singleByte = ByteArray(1)
+
+    override fun read(): Int {
+        val n = read(singleByte, 0, 1)
+        return if (n <= 0) -1 else singleByte[0].toInt() and 0xFF
+    }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (off < 0 || len < 0 || off > b.size - len) {
+            throw IndexOutOfBoundsException()
+        }
+        if (len == 0) return 0
+        val bb = ByteBuffer.wrap(b, off, len)
+        while (true) {
+            val n = channel.read(bb)
+            if (n != 0) return n
+            if (!channel.isOpen) return -1
+            if (!channel.isBlocking) throw IllegalBlockingModeException()
+        }
+    }
+
+    override fun close() {
+        channel.close()
+    }
+}
+
+/**
+ * Direct blocking [OutputStream] over a [SocketChannel] that writes via [SocketChannel.write]
+ * instead of [java.net.Socket.getOutputStream] (`Channels.newOutputStream`), avoiding the Android
+ * libcore `channel.blockingLock()` deadlock with concurrent reads (JDK-4509080).
+ */
+class SocketChannelOutputStream(
+    private val channel: SocketChannel,
+) : OutputStream() {
+    private val writeLock = Any()
+    private val singleByte = ByteArray(1)
+
+    override fun write(b: Int) {
+        synchronized(writeLock) {
+            singleByte[0] = b.toByte()
+            writeLocked(singleByte, 0, 1)
+        }
+    }
+
+    override fun write(b: ByteArray, off: Int, len: Int) {
+        if (off < 0 || len < 0 || off > b.size - len) {
+            throw IndexOutOfBoundsException()
+        }
+        if (len == 0) return
+        synchronized(writeLock) {
+            writeLocked(b, off, len)
+        }
+    }
+
+    private fun writeLocked(b: ByteArray, off: Int, len: Int) {
+        val bb = ByteBuffer.wrap(b, off, len)
+        while (bb.hasRemaining()) {
+            val n = channel.write(bb)
+            if (n < 0) throw IOException("SocketChannel closed during write")
+            if (n == 0) {
+                if (!channel.isOpen) throw ClosedChannelException()
+                if (!channel.isBlocking) throw IllegalBlockingModeException()
+                Thread.yield()
+            }
+        }
+    }
+
+    override fun close() {
+        channel.close()
+    }
+}
 
 /**
  * Buffered InputStream that also accepts FIFO pre-read chunks collected by [ClientDisconnectWatcher]
@@ -300,6 +389,10 @@ class ClientDisconnectWatcher {
                             }
                         }
                         awaitQuietly(unregLatch)
+                        if (channel.isOpen && !channel.isBlocking) {
+                            runCatching { keyRef.getAndSet(null)?.cancel() }
+                            runCatching { channel.configureBlocking(true) }
+                        }
                     } else {
                         runCatching { keyRef.getAndSet(null)?.cancel() }
                         if (channel.isOpen) {

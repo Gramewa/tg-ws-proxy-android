@@ -2,7 +2,9 @@ package io.github.tgwsproxy.android.proxy
 
 import io.github.tgwsproxy.android.update.AppUpdater
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -22,6 +24,8 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.nio.channels.ServerSocketChannel
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
@@ -1011,7 +1015,7 @@ class ProxyProtocolTest {
             // Subtest A: client closes socket mid-dial -> guard cancels immediately
             val clientA = Socket("127.0.0.1", server.socket().localPort)
             val chanA = server.accept()
-            val preA = BufferedClientInputStream(chanA.socket().getInputStream(), 1024)
+            val preA = BufferedClientInputStream(SocketChannelInputStream(chanA), 1024)
             val guardA = watcher.createGuard(chanA, preA)
             thread(isDaemon = true) {
                 Thread.sleep(60L)
@@ -1036,7 +1040,7 @@ class ProxyProtocolTest {
             val clientB = Socket("127.0.0.1", server.socket().localPort)
             clientB.tcpNoDelay = true
             val chanB = server.accept()
-            val preB = BufferedClientInputStream(chanB.socket().getInputStream(), 1024)
+            val preB = BufferedClientInputStream(SocketChannelInputStream(chanB), 1024)
             val dataB = DataInputStream(preB)
 
             // Send initial 8 bytes; server consumes first 4, leaving 4 inside BufferedClientInputStream.readBuf
@@ -1070,7 +1074,7 @@ class ProxyProtocolTest {
             // Subtest C: client sends early bytes AND THEN closes mid-dial -> guard still cancels
             val clientC = Socket("127.0.0.1", server.socket().localPort)
             val chanC = server.accept()
-            val preC = BufferedClientInputStream(chanC.socket().getInputStream(), 1024)
+            val preC = BufferedClientInputStream(SocketChannelInputStream(chanC), 1024)
             val guardC = watcher.createGuard(chanC, preC)
             thread(isDaemon = true) {
                 Thread.sleep(40L)
@@ -1095,6 +1099,273 @@ class ProxyProtocolTest {
             watcher.stop()
             runCatching { server.close() }
         }
+    }
+
+    @Test
+    fun socketChannelStreamsDoNotAcquireBlockingLockDuringFullDuplexIo(): Unit = runBlocking {
+        // Guards against Android libcore's JDK-4509080 deadlock where SocketAdaptor.SocketInputStream
+        // and Channels.newOutputStream both synchronize on SocketChannel.blockingLock().
+        // Explicitly holding chan.blockingLock() on another thread proves neither read nor write touches it.
+        val server = ServerSocketChannel.open().apply {
+            configureBlocking(true)
+            socket().reuseAddress = true
+            socket().bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0))
+        }
+        val client = Socket("127.0.0.1", server.socket().localPort).apply {
+            tcpNoDelay = true
+            soTimeout = 3_000
+        }
+        val chan = server.accept()
+        val lockAcquired = CountDownLatch(1)
+        val releaseLock = CountDownLatch(1)
+        val lockHolder = thread(isDaemon = true) {
+            synchronized(chan.blockingLock()) {
+                lockAcquired.countDown()
+                releaseLock.await(5, TimeUnit.SECONDS)
+            }
+        }
+        try {
+            assertTrue("Expected holder thread to acquire blockingLock", lockAcquired.await(2, TimeUnit.SECONDS))
+
+            val preIn = BufferedClientInputStream(SocketChannelInputStream(chan), 8192)
+            val stream = RawClientStream(chan.socket(), DataInputStream(preIn), SocketChannelOutputStream(chan))
+
+            // Simulate Telegram client sending packet 1 (req_pq_multi) then waiting for server reply (resPQ)
+            val req1 = "REQ_PQ_MULTI_PAYLOAD".toByteArray(Charsets.US_ASCII)
+            val res1 = "RES_PQ_RESPONSE_PAYLOAD".toByteArray(Charsets.US_ASCII)
+            val req2 = "REQ_DH_PARAMS_PAYLOAD".toByteArray(Charsets.US_ASCII)
+
+            client.getOutputStream().write(req1)
+            client.getOutputStream().flush()
+
+            val receivedByProxy = ByteArrayOutputStream()
+            val req1Received = CountDownLatch(1)
+            val req2Received = CountDownLatch(1)
+
+            val readerJob = launch(Dispatchers.IO) {
+                val buf = ByteArray(1024)
+                while (true) {
+                    val n = stream.read(buf)
+                    if (n <= 0) break
+                    receivedByProxy.write(buf, 0, n)
+                    val cur = receivedByProxy.size()
+                    if (cur >= req1.size) req1Received.countDown()
+                    if (cur >= req1.size + req2.size) {
+                        req2Received.countDown()
+                        break
+                    }
+                }
+            }
+
+            assertTrue("Expected proxy reader to receive req1 while blockingLock is held", req1Received.await(2, TimeUnit.SECONDS))
+            // Give readerJob time to loop back and block inside channel.read() waiting for req2
+            delay(50L)
+
+            // Concurrently write res1 while readerJob is blocked in channel.read() AND blockingLock is held
+            val writeDone = CountDownLatch(1)
+            val writerJob = launch(Dispatchers.IO) {
+                stream.write(res1)
+                writeDone.countDown()
+            }
+            assertTrue("Expected proxy write not to deadlock with concurrent read / blockingLock", writeDone.await(2, TimeUnit.SECONDS))
+
+            val clientGot = ByteArray(res1.size)
+            DataInputStream(client.getInputStream()).readFully(clientGot)
+            assertArrayEquals(res1, clientGot)
+
+            // Client responds with req2 -> proxy reader receives it cleanly
+            client.getOutputStream().write(req2)
+            client.getOutputStream().flush()
+            assertTrue("Expected proxy reader to receive req2", req2Received.await(2, TimeUnit.SECONDS))
+            assertArrayEquals(req1 + req2, receivedByProxy.toByteArray())
+
+            writerJob.join()
+            readerJob.join()
+        } finally {
+            releaseLock.countDown()
+            lockHolder.join(1_000L)
+            runCatching { client.close() }
+            runCatching { chan.close() }
+            runCatching { server.close() }
+        }
+    }
+
+    @Test
+    fun bridgeWsReencryptCloseReasonDistinguishesClientNormalFromUpstreamWsClose(): Unit = runBlocking {
+        // Helper to run one bidirectional MTProto-over-WS session through ProxyBridge.bridgeWsReencrypt
+        // and return the session-closed log line.
+        suspend fun runSession(closeFromUpstream: Boolean): String {
+            ProxyLogger.clear()
+            val secret = ByteArray(16) { (it + 1).toByte() }
+            val protoTag = HandshakeCrypto.PROTO_TAG_SECURE
+            // Build a valid client obfs2 handshake with `secret`
+            val rnd = ByteArray(64) { (0x20 + it).toByte() }
+            val decPrekeyIv = rnd.copyOfRange(8, 56)
+            val cltEncKey = MessageDigest.getInstance("SHA-256").apply {
+                update(decPrekeyIv.copyOfRange(0, 32))
+                update(secret)
+            }.digest()
+            val cltEncIv = decPrekeyIv.copyOfRange(32, 48)
+            val cltEncForInit = AesCtr(cltEncKey, cltEncIv)
+            val tailPlain = protoTag + byteArrayOf(2, 0, 0x11, 0x22)
+            val encFull = cltEncForInit.update(rnd)
+            val clientInit = rnd.copyOf()
+            for (i in 0 until 8) {
+                val ks = encFull[56 + i].toInt() xor rnd[56 + i].toInt()
+                clientInit[56 + i] = (tailPlain[i].toInt() xor ks).toByte()
+            }
+            val parsed = HandshakeCrypto.tryHandshake(clientInit, secret)!!
+            val relayInit = HandshakeCrypto.generateRelayInit(parsed.protoTag, 2)
+            val ctx = HandshakeCrypto.buildCryptoCtx(parsed.decPrekeyAndIv, secret, relayInit)
+
+            // Client-side ciphers (matching Telegram Android)
+            val cltOutCipher = AesCtr(cltEncKey, cltEncIv).also { it.update(ByteArray(64)) }
+            val cltInPrekeyIv = decPrekeyIv.reversedArray()
+            val cltInKey = MessageDigest.getInstance("SHA-256").apply {
+                update(cltInPrekeyIv.copyOfRange(0, 32))
+                update(secret)
+            }.digest()
+            val cltInCipher = AesCtr(cltInKey, cltInPrekeyIv.copyOfRange(32, 48))
+
+            // Upstream Telegram server-side ciphers (matching relayInit)
+            val tgInCipher = AesCtr(
+                relayInit.copyOfRange(8, 40),
+                relayInit.copyOfRange(40, 56),
+            ).also { it.update(ByteArray(64)) }
+            val tgOutPrekeyIv = relayInit.copyOfRange(8, 56).reversedArray()
+            val tgOutCipher = AesCtr(
+                tgOutPrekeyIv.copyOfRange(0, 32),
+                tgOutPrekeyIv.copyOfRange(32, 48),
+            )
+
+            // Local mock WS upstream server
+            val wsServer = ServerSocket(0, 5, InetAddress.getByName("127.0.0.1"))
+            val wsThread = thread(isDaemon = true) {
+                wsServer.accept().use { s ->
+                    val input = DataInputStream(s.getInputStream())
+                    val out = s.getOutputStream()
+                    var wsKey = ""
+                    while (true) {
+                        val line = RawWebSocket.readHttpLine(input) ?: break
+                        if (line.isEmpty()) break
+                        if (line.startsWith("Sec-WebSocket-Key:", ignoreCase = true)) {
+                            wsKey = line.substringAfter(':').trim()
+                        }
+                    }
+                    val accept = RawWebSocket.computeWebSocketAccept(wsKey)
+                    out.write(
+                        ("HTTP/1.1 101 Switching Protocols\r\n" +
+                            "Upgrade: websocket\r\n" +
+                            "Connection: Upgrade\r\n" +
+                            "Sec-WebSocket-Accept: $accept\r\n\r\n").toByteArray(Charsets.US_ASCII)
+                    )
+                    out.flush()
+
+                    // Read 1 masked binary WS frame from proxy (packet 1)
+                    val b0 = input.readUnsignedByte()
+                    val b1 = input.readUnsignedByte()
+                    assertEquals(RawWebSocket.OP_BINARY, b0 and 0x0F)
+                    val len = b1 and 0x7F
+                    val mask = ByteArray(4).also { input.readFully(it) }
+                    val payload = ByteArray(len).also { input.readFully(it) }
+                    for (i in 0 until len) payload[i] = (payload[i].toInt() xor mask[i and 3].toInt()).toByte()
+                    tgInCipher.updateInPlace(payload)
+
+                    // Send 1 unmasked binary WS reply frame back to proxy
+                    val replyPlain = byteArrayOf(8, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8)
+                    val replyEnc = tgOutCipher.update(replyPlain)
+                    out.write(byteArrayOf((0x80 or RawWebSocket.OP_BINARY).toByte(), replyEnc.size.toByte()) + replyEnc)
+                    out.flush()
+
+                    if (closeFromUpstream) {
+                        // Send WS OP_CLOSE with status 1000
+                        out.write(byteArrayOf((0x80 or RawWebSocket.OP_CLOSE).toByte(), 2, 0x03, 0xE8.toByte()))
+                        out.flush()
+                        Thread.sleep(100L)
+                    } else {
+                        // Wait until proxy closes socket after client EOF
+                        runCatching { input.read() }
+                    }
+                }
+            }
+
+            // Local client SocketChannel pair
+            val clientServer = ServerSocketChannel.open().apply {
+                configureBlocking(true)
+                socket().reuseAddress = true
+                socket().bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0))
+            }
+            val clientSock = Socket("127.0.0.1", clientServer.socket().localPort).apply {
+                tcpNoDelay = true
+                soTimeout = 3_000
+            }
+            val serverChan = clientServer.accept()
+            val clientStream = RawClientStream(
+                serverChan.socket(),
+                DataInputStream(BufferedClientInputStream(SocketChannelInputStream(serverChan), 8192)),
+                SocketChannelOutputStream(serverChan),
+            )
+            val ws = RawWebSocket.connect(
+                host = "127.0.0.1",
+                domain = "127.0.0.1",
+                timeoutMs = 2_000,
+                secure = false,
+                portOverride = wsServer.localPort,
+            )
+
+            try {
+                val clientJob = launch(Dispatchers.IO) {
+                    // Send padded-intermediate packet 1
+                    val pkt1Plain = byteArrayOf(8, 0, 0, 0, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80.toByte())
+                    clientSock.getOutputStream().write(cltOutCipher.update(pkt1Plain))
+                    clientSock.getOutputStream().flush()
+
+                    // Receive reply packet 1 cleanly
+                    val replyBuf = ByteArray(12)
+                    DataInputStream(clientSock.getInputStream()).readFully(replyBuf)
+                    val decReply = cltInCipher.update(replyBuf)
+                    assertArrayEquals(byteArrayOf(8, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8), decReply)
+
+                    if (!closeFromUpstream) {
+                        clientSock.close()
+                    }
+                }
+
+                ProxyBridge.bridgeWsReencrypt(
+                    stream = clientStream,
+                    ws = ws,
+                    label = "test-client",
+                    ctx = ctx,
+                    dc = 2,
+                    isMedia = false,
+                    splitter = MsgSplitter(HandshakeCrypto.PROTO_PADDED_INTERMEDIATE_INT),
+                )
+                clientJob.join()
+                return ProxyLogger.exportText()
+            } finally {
+                runCatching { clientSock.close() }
+                runCatching { serverChan.close() }
+                runCatching { clientServer.close() }
+                runCatching { wsServer.close() }
+                wsThread.join(1_000L)
+            }
+        }
+
+        val clientClosedLog = runSession(closeFromUpstream = false)
+        assertTrue(
+            "Expected clean client disconnect to log (normal), got:\n$clientClosedLog",
+            clientClosedLog.contains("WS session closed (normal):"),
+        )
+        assertFalse(
+            "Expected clean client disconnect NOT to log upstream: ws_close, got:\n$clientClosedLog",
+            clientClosedLog.contains("upstream: ws_close"),
+        )
+
+        val upstreamClosedLog = runSession(closeFromUpstream = true)
+        assertTrue(
+            "Expected upstream OP_CLOSE(1000) to log (upstream: ws_close(1000)), got:\n$upstreamClosedLog",
+            upstreamClosedLog.contains("WS session closed (upstream: ws_close(1000)):"),
+        )
     }
 
     @Test

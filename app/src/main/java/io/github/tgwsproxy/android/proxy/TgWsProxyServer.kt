@@ -10,6 +10,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -33,7 +34,9 @@ import kotlin.coroutines.coroutineContext
 
 class TgWsProxyServer {
     companion object {
+        private const val HANDSHAKE_TIMEOUT_MS = 10_000L
         private const val BAD_HANDSHAKE_DRAIN_LIMIT = 64 * 1024
+        private const val BAD_HANDSHAKE_DRAIN_TIMEOUT_MS = 5_000L
         private const val MAX_CONCURRENT_CLIENTS = 256
         private val random = SecureRandom()
     }
@@ -442,13 +445,49 @@ class TgWsProxyServer {
                 socket.receiveBufferSize = config.bufferSize
                 socket.sendBufferSize = config.bufferSize
             }
-            socket.soTimeout = 10_000
-
-            val preReadIn = BufferedClientInputStream(socket.getInputStream(), 8192)
+            // Direct SocketChannel streams avoid Android libcore's SocketAdaptor/Channels.newOutputStream
+            // blockingLock() full-duplex deadlock (JDK-4509080) while preserving ClientDisconnectWatcher support.
+            val preReadIn = BufferedClientInputStream(SocketChannelInputStream(channel), 8192)
             val dataIn = DataInputStream(preReadIn)
-            val rawOut = socket.getOutputStream()
+            val rawOut = SocketChannelOutputStream(channel)
 
-            val init = readClientInit(socket, dataIn, rawOut, secret, label, config) ?: return
+            val handshakeTimedOut = AtomicBoolean(false)
+            val initResult = try {
+                coroutineScope {
+                    val timeoutJob = launch {
+                        delay(HANDSHAKE_TIMEOUT_MS)
+                        handshakeTimedOut.set(true)
+                        runCatching { channel.close() }
+                    }
+                    try {
+                        readClientInit(socket, dataIn, rawOut, secret, label, config)
+                    } finally {
+                        timeoutJob.cancel()
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (exc: Exception) {
+                if (handshakeTimedOut.get()) {
+                    ProxyLogger.w("[$label] timeout during handshake")
+                    return
+                }
+                throw exc
+            } ?: return
+
+            if (initResult is ClientInit.MaskingFallback) {
+                FakeTls.proxyToMaskingDomain(
+                    clientSocket = socket,
+                    clientInput = dataIn,
+                    clientOutput = rawOut,
+                    initialData = initResult.clientHello,
+                    domain = initResult.masking,
+                    label = initResult.label,
+                )
+                return
+            }
+
+            val init = initResult as ClientInit.Ready
             label = init.label
             val stream = init.stream
             val handshake = init.handshake
@@ -457,12 +496,10 @@ class TgWsProxyServer {
             if (result == null) {
                 ProxyStats.connectionsBad.incrementAndGet()
                 ProxyLogger.w("[$label] bad handshake (wrong secret or proto)")
-                drainBadHandshake(stream)
+                drainBadHandshake(stream, channel)
                 return
             }
 
-            // Disable 10s handshake read timeout for long-lived proxied session
-            socket.soTimeout = 0
             val clientSetup = clientDisconnectWatcher.createGuard(channel, preReadIn)
 
             var dc = result.dcId
@@ -564,11 +601,19 @@ class TgWsProxyServer {
         }
     }
 
-    private data class ClientInit(
-        val handshake: ByteArray,
-        val stream: ClientStream,
-        val label: String,
-    )
+    private sealed interface ClientInit {
+        data class Ready(
+            val handshake: ByteArray,
+            val stream: ClientStream,
+            val label: String,
+        ) : ClientInit
+
+        data class MaskingFallback(
+            val clientHello: ByteArray,
+            val masking: String,
+            val label: String,
+        ) : ClientInit
+    }
 
     private suspend fun readClientInit(
         socket: Socket,
@@ -640,8 +685,7 @@ class TgWsProxyServer {
                     "[$label] Fake TLS ${if (replayed) "hello replayed" else "verify failed"} " +
                         "(size=${clientHello.size} rec=$recordLen) -> masking"
                 )
-                FakeTls.proxyToMaskingDomain(socket, input, output, clientHello, masking, label)
-                return null
+                return ClientInit.MaskingFallback(clientHello, masking, label)
             }
 
             ProxyLogger.d("[$label] Fake TLS handshake ok (ts=${tlsResult.timestamp})")
@@ -664,7 +708,7 @@ class TgWsProxyServer {
                 ProxyLogger.d("[$label] incomplete obfs2 init inside TLS")
                 return null
             }
-            return ClientInit(handshake, FakeTlsClientStream(tlsStream), label)
+            return ClientInit.Ready(handshake, FakeTlsClientStream(tlsStream), label)
         } else if (masking.isNotEmpty()) {
             ProxyLogger.d("[$label] non-TLS byte 0x%02X -> HTTP redirect".format(firstByte))
             val redirect = (
@@ -685,20 +729,28 @@ class TgWsProxyServer {
                 return null
             }
             val handshake = byteArrayOf(firstByte.toByte()) + rest
-            return ClientInit(handshake, RawClientStream(socket, input, output), label)
+            return ClientInit.Ready(handshake, RawClientStream(socket, input, output), label)
         }
     }
 
-    private fun drainBadHandshake(stream: ClientStream) {
-        val buf = ByteArray(4096)
-        var remaining = BAD_HANDSHAKE_DRAIN_LIMIT
-        try {
-            while (remaining > 0) {
-                val n = stream.read(buf)
-                if (n <= 0) break
-                remaining -= n
+    private suspend fun drainBadHandshake(stream: ClientStream, channel: SocketChannel) {
+        coroutineScope {
+            val timeoutJob = launch {
+                delay(BAD_HANDSHAKE_DRAIN_TIMEOUT_MS)
+                runCatching { channel.close() }
             }
-        } catch (_: Exception) {
+            try {
+                val buf = ByteArray(4096)
+                var remaining = BAD_HANDSHAKE_DRAIN_LIMIT
+                while (remaining > 0) {
+                    val n = stream.read(buf)
+                    if (n <= 0) break
+                    remaining -= n
+                }
+            } catch (_: Exception) {
+            } finally {
+                timeoutJob.cancel()
+            }
         }
     }
 

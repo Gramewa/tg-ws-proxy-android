@@ -66,6 +66,10 @@ class RawWebSocket private constructor(
     var lastPongMs: Long = ProxyClock.monotonicMs()
         private set
 
+    @Volatile
+    var lastCloseCode: Int? = null
+        private set
+
     private val writeMutex = Mutex()
     private val fragBuffer = ByteArrayOutputStream()
 
@@ -161,6 +165,7 @@ class RawWebSocket private constructor(
                 OP_CLOSE -> {
                     isClosed = true
                     val (code, reason) = parseClose(payload)
+                    lastCloseCode = code
                     ProxyLogger.d("WS OP_CLOSE from upstream: code=$code reason=$reason")
                     try {
                         val closePayload = if (payload.size >= 2) payload.copyOfRange(0, 2) else ByteArray(0)

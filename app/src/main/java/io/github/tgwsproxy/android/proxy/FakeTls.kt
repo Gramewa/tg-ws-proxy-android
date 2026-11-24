@@ -3,6 +3,8 @@ package io.github.tgwsproxy.android.proxy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -17,6 +19,7 @@ import java.nio.ByteBuffer
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicLong
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import javax.net.ssl.SNIHostName
@@ -491,12 +494,25 @@ object FakeTls {
             }
 
             coroutineScope {
+                val lastActivityMs = AtomicLong(ProxyClock.monotonicMs())
+                val idleWatchdog = launch {
+                    while (isActive) {
+                        val idleMs = ProxyClock.monotonicMs() - lastActivityMs.get()
+                        if (idleMs >= 30_000L) {
+                            try { upstream.close() } catch (_: Exception) {}
+                            try { clientSocket.close() } catch (_: Exception) {}
+                            break
+                        }
+                        delay((30_000L - idleMs).coerceAtLeast(250L))
+                    }
+                }
                 val t1 = launch {
                     val buf = ByteArray(16384)
                     try {
                         while (true) {
                             val n = clientInput.read(buf)
                             if (n <= 0) break
+                            lastActivityMs.set(ProxyClock.monotonicMs())
                             upOut.write(buf, 0, n)
                             upOut.flush()
                         }
@@ -511,6 +527,7 @@ object FakeTls {
                         while (true) {
                             val n = upIn.read(buf)
                             if (n <= 0) break
+                            lastActivityMs.set(ProxyClock.monotonicMs())
                             clientOutput.write(buf, 0, n)
                             clientOutput.flush()
                         }
@@ -521,6 +538,7 @@ object FakeTls {
                 }
                 t1.join()
                 t2.join()
+                idleWatchdog.cancel()
             }
         } catch (_: Exception) {
         } finally {
