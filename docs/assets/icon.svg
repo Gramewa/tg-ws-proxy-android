@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="512" height="512">
+  <defs>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="108" height="108" rx="24" ry="24" />
+    </clipPath>
+    <linearGradient id="bgGrad" x1="16.7%" y1="7.4%" x2="85.2%" y2="94.4%">
+      <stop offset="0%" stop-color="#0C0F15" />
+      <stop offset="50%" stop-color="#121C2D" />
+      <stop offset="100%" stop-color="#162C4E" />
+    </linearGradient>
+    <linearGradient id="waveFill" x1="50%" y1="46.3%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#85B2FF" stop-opacity="0.18" />
+      <stop offset="100%" stop-color="#85B2FF" stop-opacity="0.02" />
+    </linearGradient>
+    <linearGradient id="rimGrad" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.22" />
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.05" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <!-- Background gradient -->
+    <rect x="0" y="0" width="108" height="108" fill="url(#bgGrad)" />
+
+    <!-- Ambient wave horizon -->
+    <path d="M0,74 C24,72 36,60 56,62 C76,64 88,52 108,50 L108,108 L0,108 Z" fill="url(#waveFill)" />
+    <path d="M0,74 C24,72 36,60 56,62 C76,64 88,52 108,50" fill="none" stroke="#85B2FF" stroke-opacity="0.30" stroke-width="1.4" />
+
+    <!-- Foreground carrier wave (scaled slightly for crisp 512px icon framing) -->
+    <g transform="translate(54 54) scale(1.22) translate(-54 -54)">
+      <path d="M30,68 C40,68 45,62 54,63 C63,64 69,57 78,56" fill="none" stroke="#85B2FF" stroke-opacity="0.55" stroke-width="2.4" stroke-linecap="round" />
+
+      <!-- Live wave tip dot -->
+      <circle cx="78" cy="56" r="2.8" fill="#4ADE80" />
+
+      <!-- Left main wing -->
+      <path d="M31.5,47.5 L72.0,32.5 L46.8,52.8 Z" fill="#FFFFFF" />
+
+      <!-- Inner fold -->
+      <path d="M46.8,52.8 L72.0,32.5 L52.4,56.5 L48.6,65.2 Z" fill="#C6DBFF" />
+
+      <!-- Under-wing shadow -->
+      <path d="M48.6,65.2 L52.4,56.5 L56.8,60.0 Z" fill="#85B2FF" />
+
+      <!-- Right main wing -->
+      <path d="M52.4,56.5 L72.0,32.5 L64.4,66.0 Z" fill="#EAF2FF" />
+    </g>
+
+    <!-- Subtle top specular rim -->
+    <rect x="0.75" y="0.75" width="106.5" height="106.5" rx="23.25" ry="23.25" fill="none" stroke="url(#rimGrad)" stroke-width="1.5" />
+  </g>
+</svg>

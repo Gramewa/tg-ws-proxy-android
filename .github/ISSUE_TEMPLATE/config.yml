@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: "💬 Обсуждения и помощь по настройке / Discussions & Q&A"
+    url: "https://github.com/Gramewa/tg-ws-proxy-android/discussions"
+    about: "Вопросы по операторам, настройке DoH, чистого IP Cloudflare и своих Worker'ов"
+  - name: "📖 Инструкция, если не грузятся медиа / Media troubleshooting"
+    url: "https://github.com/Gramewa/tg-ws-proxy-android#если-плохо-грузятся-медиа"
+    about: "Быстрые советы по порту 80, DoH и очистке DC"

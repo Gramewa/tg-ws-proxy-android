@@ -1,0 +1,1 @@
+Локальный MTProto WebSocket-прокси для Telegram без VPN и root

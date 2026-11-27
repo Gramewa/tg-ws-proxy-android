@@ -1,0 +1,86 @@
+name: "Сообщить о проблеме / Bug report"
+description: "Прокси не подключается, не грузятся медиа или произошёл сбой / Connection issue, media loading problem, or crash"
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Перед отправкой проверьте [рекомендации в README](https://github.com/Gramewa/tg-ws-proxy-android#если-плохо-грузятся-медиа): часто помогает включение **Резервного порта 80**, **DoH (1.1.1.1)** или очистка списка DC (`всё в CF`).
+
+  - type: input
+    id: app_version
+    attributes:
+      label: "Версия приложения / App version"
+      placeholder: "например, v1.3.1"
+    validations:
+      required: true
+
+  - type: input
+    id: device_android
+    attributes:
+      label: "Устройство и версия Android / Device & Android version"
+      placeholder: "например, Pixel 7, Android 15 / Xiaomi, HyperOS (Android 14)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tg_client
+    attributes:
+      label: "Клиент Telegram / Telegram client"
+      options:
+        - "Telegram (официальный)"
+        - "AyuGram"
+        - "NekoGram"
+        - "Plus Messenger"
+        - "ForkGram / ExteraGram"
+        - "Другой (укажите ниже)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: network_type
+    attributes:
+      label: "Тип сети / Network type"
+      options:
+        - "Wi-Fi (домашний провайдер)"
+        - "Мобильный интернет (LTE / 5G)"
+        - "Оба (Wi-Fi и мобильная сеть)"
+    validations:
+      required: true
+
+  - type: input
+    id: isp
+    attributes:
+      label: "Оператор / провайдер (опционально) / ISP or carrier (optional)"
+      placeholder: "например, МТС / МегаФон / Ростелеком"
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: "Что происходит / What happened"
+      description: "Опишите проблему: зависает подключение, не грузятся фото/видео, останавливается в фоне и т.д. Укажите, что показывает встроенная кнопка «Проверить маршрут»."
+      placeholder: "При включении прокси статус «Подключение...», в проверке маршрута TLS :443 нет ответа, HTTP :80 95 мс..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Логи из приложения (Pro → Логи) / App logs"
+      description: "Секреты и сторонние домены скрываются автоматически, но перед отправкой всё равно проверьте, что в логах нет личных данных."
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: "Что уже пробовали / Already tried"
+      options:
+        - label: "Обновил(а) приложение до последнего релиза"
+        - label: "Пробовал(а) включить «Резервный порт 80»"
+        - label: "Пробовал(а) включить DoH (1.1.1.1) в Pro → Настройки"
+        - label: "Снял(а) ограничения батареи для приложения"

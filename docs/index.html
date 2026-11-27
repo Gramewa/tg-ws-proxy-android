@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TG WS Proxy для Android — локальный прокси для Telegram</title>
+  <meta name="description" content="Локальный MTProto WebSocket-прокси для Telegram на Android (~1.9 МБ, чистый Kotlin). Без VPN, root и чужих серверов. Автопереход на HTTP :80 за 750 мс, DoH и HTTP/2." />
+  <meta name="theme-color" content="#0B0D11" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="TG WS Proxy для Android — локальный прокси для Telegram" />
+  <meta property="og:description" content="Чистый Kotlin (~1.9 МБ), без VPN и root. Совместимость с Flowseal/tg-ws-proxy и автопереход на HTTP :80 за 750 мс." />
+  <meta property="og:image" content="https://gramewa.github.io/tg-ws-proxy-android/assets/social-preview.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a href="#top" class="brand" id="brand-home">
+        <img src="assets/icon.svg" alt="TG WS Proxy" width="30" height="30" />
+        <span>TG WS Proxy</span>
+      </a>
+
+      <nav class="nav-links" aria-label="Navigation">
+        <a href="#setup" data-i18n="navSetup">Подключение</a>
+        <a href="#engine" data-i18n="navEngine">Как устроен</a>
+        <a href="#audit" data-i18n="navAudit">Что внутри APK</a>
+      </nav>
+
+      <div class="header-controls">
+        <button type="button" class="ctrl-btn" id="lang-toggle" data-i18n="langBtn" aria-label="Switch language">EN</button>
+        <button type="button" class="ctrl-btn icon-only" id="theme-toggle" aria-label="Toggle theme"></button>
+        <a class="ctrl-btn" id="header-github-link" href="https://github.com/Gramewa/tg-ws-proxy-android" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.57.1.78-.25.78-.55v-2.16c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.47.11-3.06 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.77.11 3.06.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.07.78 2.15v3.19c0 .31.21.66.79.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
+          <span>GitHub</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <h1 data-i18n="heroTitle">Локальный прокси для Telegram без VPN</h1>
+
+          <p class="hero-lead" data-i18n="heroLead">
+            Поднимает MTProto WebSocket-прокси прямо на телефоне по протоколу Flowseal/tg-ws-proxy. Чистый Kotlin (~1.9 МБ), без root и чужих серверов, с автопереходом на HTTP :80 за 750 мс.
+          </p>
+
+          <div class="cta-row">
+            <a
+              id="download-apk-btn"
+              class="btn btn-primary"
+              href="https://github.com/Gramewa/tg-ws-proxy-android/releases/download/v1.3.1/tg-ws-proxy-android-v1.3.1.apk"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              <span id="download-apk-text">Скачать APK (v1.3.1 · 1.9 МБ)</span>
+            </a>
+
+            <a
+              id="obtainium-btn"
+              class="btn btn-secondary"
+              href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22io.github.tgwsproxy.android%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FGramewa%2Ftg-ws-proxy-android%22%2C%22author%22%3A%22Gramewa%22%2C%22name%22%3A%22TG%20WS%20Proxy%22%7D"
+              target="_blank"
+              rel="noopener"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="23 4 23 10 17 10"/>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+              </svg>
+              <span data-i18n="obtainiumBtn">Obtainium</span>
+            </a>
+          </div>
+
+          <div class="release-meta">
+            <span data-i18n="metaAndroid">Android 8.0+ · Universal APK</span>
+            <span class="sep">·</span>
+            <span id="release-version-meta">v1.3.1</span>
+            <span class="sep">·</span>
+            <span>MIT</span>
+            <button type="button" class="sha-btn" id="copy-sha-btn" title="Copy APK SHA-256">
+              <span id="sha-label">SHA-256: 14f5dea6d7…</span>
+            </button>
+          </div>
+
+          <div class="route-strip" aria-label="Proxy route">
+            <span class="route-node client">Telegram</span>
+            <span class="route-wire" aria-hidden="true"></span>
+            <span class="route-node local">:1443</span>
+            <span class="route-wire to-upstream" aria-hidden="true"></span>
+            <span class="route-node upstream">
+              <span class="route-dot" aria-hidden="true"></span>
+              <span data-i18n="routeUpstream">CF :80 (авто)</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="device-stage" id="interface">
+          <div class="phone-frame">
+            <div class="phone-screen">
+              <img src="screenshots/simple-dark.png" alt="Простой режим — тёмная тема" data-screen="simple" class="is-active" />
+              <img src="screenshots/pro-dark.png" alt="Pro-режим — статистика и маршруты" data-screen="pro" />
+              <img src="screenshots/settings-light.png" alt="Светлая тема — настройки Cloudflare и DoH" data-screen="light" />
+            </div>
+          </div>
+
+          <div class="screen-switcher" role="tablist" aria-label="App screenshots">
+            <button type="button" class="screen-tab is-active" id="tab-simple" data-screen="simple" role="tab" aria-selected="true" data-i18n="tabSimple">Простой</button>
+            <button type="button" class="screen-tab" id="tab-pro" data-screen="pro" role="tab" aria-selected="false" data-i18n="tabPro">Pro</button>
+            <button type="button" class="screen-tab" id="tab-light" data-screen="light" role="tab" aria-selected="false" data-i18n="tabLight">Светлая</button>
+          </div>
+
+          <p class="screen-caption" id="screen-caption"></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="setup">
+      <div class="container section-grid">
+        <div class="section-label">
+          <h2 data-i18n="setupTitle">Как подключить</h2>
+          <p data-i18n="setupSub">Обновления ставятся поверх прошлой версии без потери настроек.</p>
+        </div>
+
+        <div>
+          <div class="velvet-group">
+            <div class="velvet-row">
+              <span class="row-idx">01</span>
+              <div>
+                <h3 data-i18n="step1Title">Установите APK</h3>
+                <p data-i18n="step1Body">Один универсальный файл для Android 8.0+ — выбирать архитектуру процессора не нужно.</p>
+              </div>
+            </div>
+
+            <div class="velvet-row">
+              <span class="row-idx">02</span>
+              <div>
+                <h3 data-i18n="step2Title">Запустите прокси</h3>
+                <p data-i18n="step2Body">Нажмите кнопку запуска на главном экране — откроется локальный MTProto-порт 127.0.0.1:1443.</p>
+              </div>
+            </div>
+
+            <div class="velvet-row">
+              <span class="row-idx">03</span>
+              <div>
+                <h3 data-i18n="step3Title">Откройте в Telegram</h3>
+                <p data-i18n="step3Body">Кнопка «Открыть в Telegram» передаст прокси через tg://proxy в официальный клиент, AyuGram, NekoGram или Plus Messenger.</p>
+              </div>
+            </div>
+          </div>
+
+          <details class="trouble-box" id="troubleshooting">
+            <summary>
+              <span data-i18n="troubleSummary">Если плохо грузятся медиа или прокси останавливается в фоне</span>
+              <svg class="trouble-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </summary>
+            <div class="trouble-content">
+              <ul>
+                <li data-i18n-html="trouble1"></li>
+                <li data-i18n-html="trouble2"></li>
+                <li data-i18n-html="trouble3"></li>
+                <li data-i18n-html="trouble4"></li>
+              </ul>
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="engine">
+      <div class="container section-grid">
+        <div class="section-label">
+          <h2 data-i18n="engineTitle">Как устроен прокси</h2>
+          <p data-i18n="engineSub">Полная совместимость с Flowseal/tg-ws-proxy v1.12.0+ без VPN-слота Android.</p>
+        </div>
+
+        <div class="spec-list">
+          <div class="spec-row">
+            <span class="spec-key" data-i18n="s1Key">~1.9 МБ APK</span>
+            <div class="spec-body">
+              <h3 data-i18n="s1Title">Чистый Kotlin вместо тяжёлых обёрток</h3>
+              <p data-i18n="s1Body">Без встроенных Rust, Python или Go-бинарников. Zero-copy криптодвижок AES-CTR, прямой SocketChannel I/O и низкий расход памяти.</p>
+            </div>
+          </div>
+
+          <div class="spec-row">
+            <span class="spec-key green" data-i18n="s2Key">~750 мс · :80</span>
+            <div class="spec-body">
+              <h3 data-i18n="s2Title">Автопереход на HTTP :80 и HTTP/2 для медиа</h3>
+              <p data-i18n="s2Body">Если TLS на 443-м порту режется, параллельная гонка переключает Cloudflare Proxy и ваши CF Workers на 80-й порт меньше чем за секунду. Шифрование MTProto сохраняется.</p>
+            </div>
+          </div>
+
+          <div class="spec-row">
+            <span class="spec-key" data-i18n="s3Key">DoH · Fake TLS</span>
+            <div class="spec-body">
+              <h3 data-i18n="s3Title">Сетевой стек под сложные провайдеры</h3>
+              <p data-i18n="s3Body">Встроенный DNS-over-HTTPS (1.1.1.1 / 8.8.8.8 / 9.9.9.9), Happy Eyeballs, опциональный чистый IP Cloudflare, балансировка доменов по EWMA и Fake TLS (ee-секрет с X25519MLKEM768).</p>
+            </div>
+          </div>
+
+          <div class="spec-row">
+            <span class="spec-key green" data-i18n="s4Key">Wi-Fi ↔ LTE</span>
+            <div class="spec-body">
+              <h3 data-i18n="s4Title">Сделано под поведение Android в фоне</h3>
+              <p data-i18n="s4Body">Сброс зависших сокетов при смене сети или VPN, плитка в шторке с активным маршрутом, hot-reload настроек без перезапуска сокета и JSON-экспорт конфига.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="audit">
+      <div class="container section-grid">
+        <div class="section-label">
+          <h2 data-i18n="auditTitle">Что внутри APK</h2>
+          <p data-i18n="auditSub">Все ограничения и сборку можно проверить прямо по исходникам.</p>
+        </div>
+
+        <div>
+          <table class="audit-table">
+            <tbody>
+              <tr>
+                <th data-i18n="a1Key">Адрес по умолчанию</th>
+                <td data-i18n-html="a1Val">Только <code>127.0.0.1:1443</code> внутри устройства. При смене на <code>0.0.0.0</code> показывается предупреждение.</td>
+              </tr>
+              <tr>
+                <th data-i18n="a2Key">Зависимости</th>
+                <td data-i18n="a2Val">Только AndroidX, Compose, Kotlin Coroutines и OkHttp. Без рекламы, аналитики и Google Play Services.</td>
+              </tr>
+              <tr>
+                <th data-i18n="a3Key">Права и бэкап</th>
+                <td data-i18n-html="a3Val"><code>allowBackup="false"</code>, секреты и домены вырезаются из логов, право <code>REQUEST_INSTALL_PACKAGES</code> не запрашивается.</td>
+              </tr>
+              <tr>
+                <th data-i18n="a4Key">Сборка релизов</th>
+                <td data-i18n-html="a4Val">Публичный GitHub Actions workflow с файлом <code>SHA256SUMS.txt</code> и отключённым блоком <code>dependenciesInfo</code>.</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="audit-links">
+            <a class="inline-link" id="link-security" href="https://github.com/Gramewa/tg-ws-proxy-android/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>
+            <a class="inline-link" id="link-manifest" href="https://github.com/Gramewa/tg-ws-proxy-android/blob/main/app/src/main/AndroidManifest.xml" target="_blank" rel="noopener">AndroidManifest.xml</a>
+            <a class="inline-link" id="link-ci" href="https://github.com/Gramewa/tg-ws-proxy-android/blob/main/.github/workflows/build.yml" target="_blank" rel="noopener">build.yml</a>
+            <a class="inline-link" id="link-releases" href="https://github.com/Gramewa/tg-ws-proxy-android/releases" target="_blank" rel="noopener" data-i18n="allReleases">Все релизы</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span data-i18n="footerNote">MIT License · Протокол Flowseal/tg-ws-proxy</span>
+      <div class="footer-links">
+        <a href="https://github.com/Gramewa/tg-ws-proxy-android" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/Gramewa/tg-ws-proxy-android/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/Gramewa/tg-ws-proxy-android/issues" target="_blank" rel="noopener">Issues</a>
+        <a href="https://github.com/Flowseal/tg-ws-proxy" target="_blank" rel="noopener">Flowseal/tg-ws-proxy</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
