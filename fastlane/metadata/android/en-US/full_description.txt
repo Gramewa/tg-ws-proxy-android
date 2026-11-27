@@ -1,0 +1,14 @@
+TG WS Proxy runs a local MTProto WebSocket proxy directly on your Android device (127.0.0.1:1443), improving Telegram connectivity and media loading without a VPN, root access, or third-party proxy servers.
+
+Built in pure Kotlin (~1.9 MB universal APK) with full protocol parity with desktop Flowseal/tg-ws-proxy (v1.12.0+).
+
+Key features:
+• Simple & Pro modes: one-tap start, live throughput wave, active route indicator, one-tap Telegram setup (compatible with Telegram, AyuGram, NekoGram, Plus Messenger, and more), plus full connection stats, JSON config export/import, and live logs.
+• Fast automatic port 80 fallback: if TLS on port 443 is blocked, the proxy switches to plain HTTP :80 in ~750 ms while keeping Telegram's end-to-end MTProto encryption intact.
+• Full transport stack: direct WebSocket DC pools with customizable SNI fronting, Cloudflare Proxy with auto-updated cached domains and EWMA latency balancing, HTTP/2 media multiplexing, custom Cloudflare Workers with auto-fallback and cooldown tracking, and Fake TLS (ee secret with X25519MLKEM768 and replay-probe protection).
+• Built-in DNS-over-HTTPS (DoH): 1.1.1.1, 8.8.8.8, and 9.9.9.9, plus IPv4/IPv6 preference, Happy Eyeballs, and optional Clean Cloudflare IP.
+• Android-first comfort: Quick Settings tile with live route status, automatic recovery on Wi-Fi/cellular/VPN switches, battery-friendly idle mode, light/dark themes, Material You (Android 12+), and English/Russian UI.
+
+Privacy & security:
+• 100% open source (MIT), no ads, no analytics, no Google Play Services.
+• Listens only on localhost (127.0.0.1) by default, disables Android cloud backup, and redacts secrets/custom domains from logs.

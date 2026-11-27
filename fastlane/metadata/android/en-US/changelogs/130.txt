@@ -1,0 +1,4 @@
+• Full protocol parity with Flowseal/tg-ws-proxy v1.12.0+: CF Worker auto :80 fallback, quota/error cooldowns, WS deadlines, and early client-disconnect dial cancellation.
+• Zero-copy AES-CTR relay engine, built-in DoH (1.1.1.1 / 8.8.8.8 / 9.9.9.9), Happy Eyeballs, and Clean Cloudflare IP option.
+• Instant settings hot-reload without restarting the local socket.
+• Refined Velvet Material 3 UI with Simple/Pro modes and live route diagnostics.

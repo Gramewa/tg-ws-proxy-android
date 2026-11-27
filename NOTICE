@@ -1,0 +1,6 @@
+TG WS Proxy Android
+Copyright (c) 2026 TG WS Proxy Android Contributors
+
+This project is an independent Android (pure Kotlin) implementation of the
+MTProto WebSocket proxy protocol designed by Flowseal/tg-ws-proxy:
+https://github.com/Flowseal/tg-ws-proxy (MIT License).

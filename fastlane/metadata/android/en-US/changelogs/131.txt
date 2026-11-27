@@ -1,0 +1,4 @@
+• Fixed Android SocketChannel full-duplex deadlock (JDK-4509080) that caused connections to hang until timeout in v1.3.0.
+• Added handshake, bad-handshake drain, and Fake TLS masking idle timeouts.
+• Improved session close attribution in logs with exact WebSocket close codes.
+• Added regression unit tests for full-duplex I/O and close reasons.

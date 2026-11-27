@@ -80,6 +80,12 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    dependenciesInfo {
+        // Exclude Google Play's encrypted DependencyInfoBlock for IzzyOnDroid / F-Droid compatibility
+        includeInApk = false
+        includeInBundle = false
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
